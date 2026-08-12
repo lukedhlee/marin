@@ -432,8 +432,8 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     smoke_page.fill(filter_input, "validation failed")
     smoke_page.press(filter_input, "Enter")
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('validation failed') && "
-        "!document.body.textContent.includes('processing data batch')",
+        "() => { const rows = Array.from(document.querySelectorAll('[data-row]')); "
+        "return rows.length > 0 && rows.every(row => row.textContent.includes('validation failed')); }",
         timeout=5000,
     )
     smoke_screenshot(

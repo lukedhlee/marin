@@ -268,10 +268,20 @@ function requestSinceMs(): number | undefined {
   return Math.max(0, ms - 1)
 }
 
+function serverFilterRequest(): { substring?: string; regex?: string } {
+  if (!filter.value) return {}
+  // Finelog's regex match is unanchored, so a pattern without regex syntax is
+  // exactly a literal substring query. Use that cheaper, long-standing wire
+  // operation and reserve the regex field for patterns that need it.
+  return /[.*+?^${}()|[\]\\]/.test(filter.value)
+    ? { regex: filter.value }
+    : { substring: filter.value }
+}
+
 function baseRequest() {
   return {
     ...sourceRequest(),
-    regex: filter.value || undefined,
+    ...serverFilterRequest(),
     minLevel: level.value ? level.value.toUpperCase() : undefined,
     sinceMs: requestSinceMs(),
   }
