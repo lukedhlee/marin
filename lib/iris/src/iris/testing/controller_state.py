@@ -20,7 +20,6 @@ from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
 from sqlalchemy import update as sa_update
 
-from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.database import ControllerDB, Tx
@@ -88,23 +87,6 @@ class ControllerTestState:
 def set_worker_health_for_test(ctrl: ControllerTestState, worker_id: WorkerId, healthy: bool) -> None:
     """Set worker health in the in-memory tracker."""
     ctrl._health.set_health_for_test(worker_id, healthy)
-
-
-def set_worker_attribute_for_test(
-    ctrl: ControllerTestState, worker_id: WorkerId, key: str, value: AttributeValue
-) -> None:
-    """Upsert one worker attribute in DB and mirror it into the in-memory projection."""
-    with ctrl._db.transaction() as cur:
-        existing = ctrl._worker_attrs.get(worker_id)
-        merged = {**existing, key: value}
-        ctrl._worker_attrs.set(cur, worker_id, merged)
-
-
-def set_worker_consecutive_failures_for_test(
-    ctrl: ControllerTestState, worker_id: WorkerId, consecutive_failures: int
-) -> None:
-    """Set worker consecutive failure count in the in-memory tracker."""
-    ctrl._health.set_consecutive_failures_for_test(worker_id, consecutive_failures)
 
 
 def set_task_state_for_test(
