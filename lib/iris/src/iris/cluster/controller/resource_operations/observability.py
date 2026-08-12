@@ -107,7 +107,7 @@ class ListUsers:
 
     def run(
         self,
-        request: resource_pb2.ListResourcesRequest,
+        _request: resource_pb2.ListResourcesRequest,
         _query: resource_observability_pb2.UserQuery,
         _context: RequestContext,
     ) -> resource_pb2.ListResourcesResponse:
