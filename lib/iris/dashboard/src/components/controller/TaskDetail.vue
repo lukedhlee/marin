@@ -104,6 +104,9 @@ const acting = ref(false)
 
 const summary = computed(() => task.value?.summary)
 const selected = computed(() => attemptData.value)
+const logAttempts = computed(() => (task.value?.attempts ?? []).map(attempt => ({
+  attemptId: attempt.identity.attemptNumber,
+})))
 const { profiling, profile } = useAttemptProfileAction(
   () => selected.value?.summary.identity,
   () => `${props.taskId}:${attemptNumber.value ?? 0}`,
@@ -401,7 +404,13 @@ useAutoRefresh(refreshPage, TASK_REFRESH_MS)
 
       <section>
         <h3 class="mb-3 text-sm font-semibold uppercase tracking-wider text-text-secondary">Logs</h3>
-        <LogViewer :task-id="taskId" :cluster="logCluster" :authority-cluster="clusterId" />
+        <LogViewer
+          :task-id="taskId"
+          :cluster="logCluster"
+          :authority-cluster="clusterId"
+          :attempts="logAttempts"
+          :current-attempt-id="attemptNumber"
+        />
       </section>
       <ProfileLink :source="taskId" />
     </div>

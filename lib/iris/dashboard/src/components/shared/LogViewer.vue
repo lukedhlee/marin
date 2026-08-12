@@ -7,7 +7,7 @@ import { useIndexCursor } from '@/composables/useIndexCursor'
 import { useLogSearch } from '@/composables/useLogSearch'
 import { useCopyToClipboard } from '@/composables/useCopyToClipboard'
 import { CUSTOM_PRESET, SINCE_PRESETS, type TimeZoneName, useTimeWindow } from '@/composables/useTimeWindow'
-import { isFederated, type FetchLogsResponse, type LogEntry, type TaskAttempt } from '@/types/rpc'
+import { isFederated, type FetchLogsResponse, type LogEntry } from '@/types/rpc'
 import { timestampMs, logLevelName, formatLogTime } from '@/utils/formatting'
 import { parseLogLinks } from '@/utils/logLinks'
 import { useBackends } from '@/composables/useBackends'
@@ -17,7 +17,7 @@ const props = withDefaults(defineProps<{
   taskId?: string
   workerId?: string
   maxHeight?: string
-  attempts?: TaskAttempt[]
+  attempts?: { attemptId: number }[]
   currentAttemptId?: number
   // Cluster-wide explorer with no fixed context: default the source to a
   // match-everything prefix instead of the local process stream.
