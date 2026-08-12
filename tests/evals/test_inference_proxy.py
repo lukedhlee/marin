@@ -20,11 +20,13 @@ from iris.resources.endpoint import EndpointAccess, EndpointDetail, EndpointQuer
 from iris.resources.endpoint import (
     EndpointAccess as ResourceEndpointAccess,
 )
-from iris.resources.identity import JobIdentity, ResourceKey, ResourceKind
+from iris.resources.identity import ResourceKey, ResourceKind
 from iris.resources.job import JobSummary
 from iris.resources.names import JobName
 from iris.resources.source import Page
+from iris.resources.state import JobState
 from iris.rpc import job_pb2
+from iris.testing.resources import make_job_summary
 from marin.execution.lazy import lower
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
@@ -106,24 +108,15 @@ class _InferenceResourceClient:
         self.endpoints: dict[ResourceKey, EndpointDetail] = {}
 
     def current_job(self, job_id: JobName) -> _CurrentJob:
-        identity = JobIdentity(
-            ResourceKey("test", ResourceKind.JOB, job_id.to_wire()),
-            "job-uid",
-        )
         return _CurrentJob(
-            summary=JobSummary(
-                identity=identity,
+            summary=make_job_summary(
+                job_id.to_wire(),
+                job_uid="job-uid",
                 owner_id="tester",
-                parent=None,
-                state=self.job_state,
-                execution_cluster_id="test",
-                backend_id="default",
+                state=JobState(self.job_state),
                 num_tasks=1,
                 submitted_at=Timestamp.from_ms(1_000),
                 started_at=Timestamp.from_ms(1_001),
-                finished_at=None,
-                error_message="",
-                pending_reason="",
             ),
             task_states=self.task_states,
         )

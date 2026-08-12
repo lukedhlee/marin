@@ -12,24 +12,12 @@ from iris.resources.names import JobName
 from iris.resources.source import Page
 from iris.resources.state import JobState, TaskState
 from iris.resources.task import TaskSummary
+from iris.testing.resources import make_job_summary
 from rigging.timing import Timestamp
 
 
 def _job(job_id: str, uid: str) -> JobSummary:
-    return JobSummary(
-        identity=JobIdentity(ResourceKey("test", ResourceKind.JOB, job_id), uid),
-        owner_id="alice",
-        parent=None,
-        state=JobState.RUNNING,
-        execution_cluster_id="test",
-        backend_id="default",
-        num_tasks=1,
-        submitted_at=Timestamp.from_ms(1),
-        started_at=None,
-        finished_at=None,
-        error_message="",
-        pending_reason="",
-    )
+    return make_job_summary(job_id, job_uid=uid)
 
 
 def test_current_job_uses_an_exact_resource_query() -> None:

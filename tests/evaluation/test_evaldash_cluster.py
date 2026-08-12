@@ -2,18 +2,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-from types import ModuleType, SimpleNamespace
+from dataclasses import replace
+from types import ModuleType
 
+from iris.resources.attempt import AttemptSummary
 from iris.resources.identity import (
-    AttemptIdentity,
     JobIdentity,
     NodeIdentity,
     ResourceKey,
     ResourceKind,
-    TaskIdentity,
 )
+from iris.resources.job import JobDetail
 from iris.resources.source import Page
-from iris.rpc import job_pb2
+from iris.resources.state import JobState, TaskState
+from iris.resources.task import TaskDetail
+from iris.testing.resources import (
+    make_attempt_summary,
+    make_job_detail,
+    make_job_summary,
+    make_task_detail,
+    make_task_summary,
+)
 from rigging.timing import Timestamp
 
 discovery = ModuleType("infra.evaldash.src.discovery")
@@ -23,69 +32,60 @@ sys.modules[discovery.__name__] = discovery
 from infra.evaldash.src import cluster  # noqa: E402
 
 
-def _attempt(task_key: ResourceKey, number: int, uid: str, *, node=None, failed: bool = False):
-    return SimpleNamespace(
-        identity=AttemptIdentity(task_key, number, uid),
-        state=job_pb2.TASK_STATE_WORKER_FAILED if failed else job_pb2.TASK_STATE_RUNNING,
+def _task(job: JobIdentity, index: int, *, node: NodeIdentity | None, failed_history: bool) -> TaskDetail:
+    summary = make_task_summary(
+        job,
+        index,
+        state=TaskState.RUNNING,
+        current_node=node,
+        started_at=Timestamp.from_ms(70),
+    )
+    attempts: list[AttemptSummary] = []
+    if failed_history:
+        attempts.append(
+            make_attempt_summary(
+                summary.identity,
+                0,
+                attempt_uid="attempt-0",
+                state=TaskState.WORKER_FAILED,
+                node=node,
+                started_at=Timestamp.from_ms(40),
+                finished_at=Timestamp.from_ms(50),
+                exit_code=1,
+                error_message="worker lost",
+            )
+        )
+    current = make_attempt_summary(
+        summary.identity,
+        len(attempts),
+        attempt_uid="attempt-1" if failed_history else "attempt-second",
         node=node,
-        exit_code=1 if failed else None,
-        error_message="worker lost" if failed else "",
-        started_at=Timestamp.from_ms(40 if failed else 70),
-        finished_at=Timestamp.from_ms(50) if failed else None,
+        started_at=Timestamp.from_ms(70),
     )
-
-
-def _task(job: JobIdentity, index: int, *, node: NodeIdentity | None, attempts: tuple):
-    key = ResourceKey("iris", ResourceKind.TASK, f"/owner/eval/{index}")
-    current_attempt = attempts[-1]
-    return SimpleNamespace(
-        summary=SimpleNamespace(
-            identity=TaskIdentity(key, f"task-uid-{index}"),
-            job=job,
-            state=job_pb2.TASK_STATE_RUNNING,
-            current_attempt=current_attempt.identity,
-            current_node=node,
-            started_at=Timestamp.from_ms(70),
-            finished_at=None,
-            error_message="",
-        ),
-        attempts=attempts,
-    )
+    attempts.append(current)
+    return make_task_detail(replace(summary, current_attempt=current.identity), tuple(attempts))
 
 
 def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
     job_key = ResourceKey("iris", ResourceKind.JOB, "/owner/eval")
     job_identity = JobIdentity(job_key, "job-uid")
-    job = SimpleNamespace(
-        summary=SimpleNamespace(
-            identity=job_identity,
-            state=job_pb2.JOB_STATE_RUNNING,
+    job = make_job_detail(
+        make_job_summary(
+            job_key.resource_id,
+            cluster_id=job_key.cluster_id,
+            job_uid=job_identity.job_uid,
+            owner_id="owner",
+            state=JobState.RUNNING,
+            num_tasks=2,
             started_at=Timestamp.from_ms(20),
-            finished_at=None,
-            error_message="",
             pending_reason="warming workers",
             exit_code=17,
         ),
-        spec=SimpleNamespace(name="evaluation"),
+        name="evaluation",
     )
     node = NodeIdentity(ResourceKey("iris", ResourceKind.NODE, "worker-a"), "gpu", "worker-uid")
-    first_key = ResourceKey("iris", ResourceKind.TASK, "/owner/eval/0")
-    first_task = _task(
-        job_identity,
-        0,
-        node=node,
-        attempts=(
-            _attempt(first_key, 0, "attempt-0", node=node, failed=True),
-            _attempt(first_key, 1, "attempt-1", node=node),
-        ),
-    )
-    second_key = ResourceKey("iris", ResourceKind.TASK, "/owner/eval/1")
-    second_task = _task(
-        job_identity,
-        1,
-        node=None,
-        attempts=(_attempt(second_key, 0, "attempt-second"),),
-    )
+    first_task = _task(job_identity, 0, node=node, failed_history=True)
+    second_task = _task(job_identity, 1, node=None, failed_history=False)
 
     class FakeResourceClient:
         def __init__(self, **_kwargs) -> None:
@@ -94,7 +94,7 @@ def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
         def list_jobs(self, _query):
             return Page((job.summary,), None, ())
 
-        def describe_job(self, _key):
+        def describe_job(self, _key) -> JobDetail:
             return job
 
         def list_tasks(self, query):
@@ -118,6 +118,7 @@ def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
 
     result = gateway.job_status("/owner/eval")
 
+    assert (result["reachable"], result["error"]) == (True, None)
     assert result["job"] == {
         "state": "JOB_STATE_RUNNING",
         "error": "",
@@ -129,8 +130,16 @@ def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
     assert [task["task_id"] for task in result["tasks"]] == ["/owner/eval/0", "/owner/eval/1"]
     first, second = result["tasks"]
     assert (first["worker_id"], first["current_attempt_id"]) == ("worker-a", 1)
-    assert [(attempt["attempt_uid"], attempt["is_worker_failure"]) for attempt in first["attempts"]] == [
-        ("attempt-0", True),
-        ("attempt-1", False),
+    assert first["exit_code"] == 0
+    assert [
+        (attempt["attempt_uid"], attempt["state"], attempt["exit_code"], attempt["error"])
+        for attempt in first["attempts"]
+    ] == [
+        ("attempt-0", "TASK_STATE_WORKER_FAILED", 1, "worker lost"),
+        ("attempt-1", "TASK_STATE_RUNNING", 0, ""),
     ]
+    assert first["attempts"][0]["started_at"] == {"epoch_ms": 40}
+    assert first["attempts"][0]["finished_at"] == {"epoch_ms": 50}
+    assert first["attempts"][1]["started_at"] == {"epoch_ms": 70}
+    assert "finished_at" not in first["attempts"][1]
     assert (second["worker_id"], second["current_attempt_id"]) == ("", 0)

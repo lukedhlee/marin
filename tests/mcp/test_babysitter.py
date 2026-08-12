@@ -1,14 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from types import SimpleNamespace
-
 import marin.mcp.babysitter as babysitter
 import pytest
+from iris.resources.attempt import AttemptSummary
 from iris.resources.endpoint import ProfileResult
+from iris.resources.execution import ResourceSpec
 from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
+from iris.resources.job import JobDetail
 from iris.resources.source import Page
+from iris.resources.state import JobState, TaskState
+from iris.resources.task import TaskDetail, TaskSummary
 from iris.rpc import job_pb2
+from iris.testing.resources import (
+    make_attempt_summary,
+    make_job_detail,
+    make_job_summary,
+    make_task_detail,
+    make_task_summary,
+)
 from marin.mcp.babysitter import (
     IrisBabysitter,
     IrisConnectionConfig,
@@ -36,15 +46,16 @@ def _attempt(
     attempt_number: int,
     attempt_uid: str,
     *,
-    state: int = job_pb2.TASK_STATE_RUNNING,
+    state: TaskState = TaskState.RUNNING,
     finished_at: Timestamp | None = None,
     exit_code: int | None = None,
     error_message: str = "",
-):
-    return SimpleNamespace(
-        identity=AttemptIdentity(_task_identity().key, attempt_number, attempt_uid),
+) -> AttemptSummary:
+    return make_attempt_summary(
+        _task_identity(),
+        attempt_number,
+        attempt_uid=attempt_uid,
         state=state,
-        node=None,
         started_at=_NOW,
         finished_at=finished_at,
         exit_code=exit_code,
@@ -53,50 +64,31 @@ def _attempt(
     )
 
 
-def _running_task_detail():
+def _running_task_detail() -> TaskDetail:
     first = _attempt(1, "attempt-one")
     second = _attempt(2, "attempt-two")
-    return SimpleNamespace(
-        summary=SimpleNamespace(
-            identity=_task_identity(),
-            state=job_pb2.TASK_STATE_RUNNING,
-            current_attempt=second.identity,
-            current_node=None,
-            failure_count=1,
-            preemption_count=0,
-            started_at=_NOW,
-            finished_at=None,
-            status_message="running",
-            error_message="",
-        ),
-        attempts=(first, second),
-        source_statuses=(),
-        root_cause_highlights=(),
+    summary = make_task_summary(
+        _job_identity(),
+        0,
+        task_uid="task-uid",
+        current_attempt=second.identity,
+        failure_count=1,
+        started_at=_NOW,
+        status_message="running",
     )
+    return make_task_detail(summary, (first, second))
 
 
-def _job_detail():
-    return SimpleNamespace(
-        summary=SimpleNamespace(
-            identity=_job_identity(),
-            owner_id="alice",
-            parent=None,
-            state=job_pb2.JOB_STATE_RUNNING,
-            execution_cluster_id="prod",
-            backend_id="east",
-            num_tasks=1,
-            submitted_at=_NOW,
-            started_at=_NOW,
-            finished_at=None,
-            error_message="",
-            pending_reason="",
-        ),
-        spec=SimpleNamespace(
-            name="train",
-            resources=SimpleNamespace(cpu_millicores=1_000, memory=1024, disk=2048, device=None),
-            ports=(),
-        ),
+def _job_detail() -> JobDetail:
+    summary = make_job_summary(
+        _job_identity().key.resource_id,
+        cluster_id="prod",
+        owner_id="alice",
+        state=JobState.RUNNING,
+        submitted_at=_NOW,
+        started_at=_NOW,
     )
+    return make_job_detail(summary, name="train", resources=ResourceSpec(cpu=1, memory=1024, disk=2048))
 
 
 class _Closeable:
@@ -117,28 +109,23 @@ def test_task_status_json_preserves_exact_identity_and_attempt_history():
     attempt = _attempt(
         1,
         "attempt-uid",
-        state=job_pb2.TASK_STATE_FAILED,
+        state=TaskState.FAILED,
         finished_at=Timestamp(2_500),
         exit_code=137,
         error_message="OOMKilled",
     )
-    task = SimpleNamespace(
-        summary=SimpleNamespace(
-            identity=task_identity,
-            state=job_pb2.TASK_STATE_FAILED,
-            current_attempt=attempt_identity,
-            current_node=None,
-            failure_count=1,
-            preemption_count=0,
-            started_at=_NOW,
-            finished_at=Timestamp(2_500),
-            status_message="",
-            error_message="OOMKilled",
-        ),
-        attempts=(attempt,),
-        source_statuses=(),
-        root_cause_highlights=("container exited 137",),
+    summary = make_task_summary(
+        _job_identity(),
+        0,
+        task_uid=task_identity.task_uid,
+        state=TaskState.FAILED,
+        current_attempt=attempt_identity,
+        failure_count=1,
+        started_at=_NOW,
+        finished_at=Timestamp(2_500),
+        error_message="OOMKilled",
     )
+    task = make_task_detail(summary, (attempt,), root_cause_highlights=("container exited 137",))
 
     payload = task_status_to_json(task)
 
@@ -154,17 +141,13 @@ def test_task_status_json_preserves_exact_identity_and_attempt_history():
 
 
 def test_job_summary_payload_preserves_summary_task_fields():
-    running_task = SimpleNamespace(
-        identity=_task_identity(),
-        task_index=0,
-        state=job_pb2.TASK_STATE_RUNNING,
-        current_node=None,
-        failure_count=0,
-        preemption_count=0,
+    running_task = make_task_summary(
+        _job_identity(),
+        0,
+        task_uid="task-uid",
+        state=TaskState.RUNNING,
         started_at=_NOW,
-        finished_at=None,
         status_message="running",
-        error_message="",
     )
 
     payload = babysitter._job_summary_payload(_job_detail(), [running_task])
@@ -178,12 +161,12 @@ def test_job_summary_payload_preserves_summary_task_fields():
 
 def test_job_summary_returns_the_selected_job(monkeypatch):
     class Resources:
-        def describe_job(self, key: ResourceKey):
+        def describe_job(self, key: ResourceKey) -> JobDetail:
             if key != ResourceKey("prod", ResourceKind.JOB, "/alice/train"):
                 raise AssertionError(f"unexpected Job key: {key}")
             return _job_detail()
 
-        def list_tasks(self, _query):
+        def list_tasks(self, _query) -> Page[TaskSummary]:
             return Page((), None, ())
 
         def close(self) -> None:
@@ -205,7 +188,7 @@ def test_job_summary_returns_the_selected_job(monkeypatch):
 )
 def test_task_profile_targets_the_exact_resource_attempt(monkeypatch, target, expected_text):
     class Resources:
-        def describe_task(self, _key: ResourceKey):
+        def describe_task(self, _key: ResourceKey) -> TaskDetail:
             return _running_task_detail()
 
         def profile_attempt(self, identity, *, profile, duration) -> ProfileResult:
@@ -230,7 +213,7 @@ def test_task_profile_targets_the_exact_resource_attempt(monkeypatch, target, ex
 
 def test_system_profile_stays_on_the_process_control_boundary(monkeypatch):
     class Resources:
-        def describe_task(self, _key: ResourceKey):
+        def describe_task(self, _key: ResourceKey) -> TaskDetail:
             raise AssertionError("system profiling must not resolve a Task")
 
         def close(self) -> None:

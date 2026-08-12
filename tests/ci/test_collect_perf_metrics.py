@@ -1,53 +1,55 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from types import SimpleNamespace
+from dataclasses import replace
 from typing import cast
 
 import pyarrow as pa
 from finelog.client import LogClient
 from iris.client import IrisClient
-from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
+from iris.resources.identity import ResourceKey, ResourceKind
+from iris.resources.job import JobSummary
 from iris.resources.source import Page
 from iris.resources.state import JobState, TaskState
+from iris.resources.task import TaskDetail, TaskSummary
+from iris.testing.resources import make_attempt_summary, make_job_summary, make_task_detail, make_task_summary
 from rigging.timing import Timestamp
 
 from scripts.ci import collect_perf_metrics
 
 
-def _task(job, index: int):
-    key = ResourceKey("test", ResourceKind.TASK, f"/owner/perf/{index}")
-    identity = TaskIdentity(key, f"task-{index}")
-    attempt = SimpleNamespace(
-        identity=AttemptIdentity(key, 0, f"attempt-{index}"),
-        exit_code=index,
-        error_message="",
-    )
-    summary = SimpleNamespace(
-        identity=identity,
-        task_index=index,
+def _task(job: JobSummary, index: int) -> tuple[TaskSummary, TaskDetail]:
+    summary = make_task_summary(
+        job.identity,
+        index,
+        task_uid=f"task-{index}",
         state=TaskState.SUCCEEDED,
-        current_node=None,
-        failure_count=0,
-        preemption_count=0,
         started_at=Timestamp.from_ms(20),
         finished_at=Timestamp.from_ms(30),
-        status_message="",
-        error_message="",
     )
-    return summary, SimpleNamespace(attempts=(attempt,))
+    attempt = make_attempt_summary(
+        summary.identity,
+        0,
+        attempt_uid=f"attempt-{index}",
+        state=TaskState.SUCCEEDED,
+        started_at=Timestamp.from_ms(20),
+        finished_at=Timestamp.from_ms(30),
+        exit_code=index,
+    )
+    summary = replace(summary, current_attempt=attempt.identity)
+    return summary, make_task_detail(summary, (attempt,))
 
 
 def test_fetch_job_summary_includes_tasks_from_every_page() -> None:
     job_key = ResourceKey("test", ResourceKind.JOB, "/owner/perf")
-    job = SimpleNamespace(
-        identity=JobIdentity(job_key, "job-uid"),
+    job = make_job_summary(
+        job_key.resource_id,
+        cluster_id=job_key.cluster_id,
         state=JobState.SUCCEEDED,
         num_tasks=3,
         submitted_at=Timestamp.from_ms(1),
         started_at=Timestamp.from_ms(2),
         finished_at=Timestamp.from_ms(40),
-        error_message="",
     )
     rows = [_task(job, index) for index in range(3)]
 
@@ -82,10 +84,15 @@ def test_fetch_job_summary_includes_tasks_from_every_page() -> None:
 
 def test_peak_worker_memory_comes_from_task_measurements() -> None:
     class FakeLogClient:
-        def query(self, *_args, **_kwargs):
+        def query(self, sql: str, *, max_rows: int):
+            assert sql == (
+                'SELECT MAX(memory_peak_mb) AS peak_worker_memory_mb FROM "iris.task" '
+                "WHERE task_id LIKE '/owner/o''clock\\_100\\%/%' ESCAPE '\\'"
+            )
+            assert max_rows == 1
             return pa.table({"peak_worker_memory_mb": [73_421]})
 
-    peak = collect_perf_metrics.fetch_peak_worker_memory_mb(cast(LogClient, FakeLogClient()), "/owner/perf")
+    peak = collect_perf_metrics.fetch_peak_worker_memory_mb(cast(LogClient, FakeLogClient()), "/owner/o'clock_100%")
     report = collect_perf_metrics.build_report(
         job_id="/owner/perf",
         summary=None,
@@ -102,7 +109,8 @@ def test_peak_worker_memory_comes_from_task_measurements() -> None:
 
 def test_missing_task_measurements_are_not_reported_as_zero_memory() -> None:
     class FakeLogClient:
-        def query(self, *_args, **_kwargs):
+        def query(self, _sql: str, *, max_rows: int):
+            assert max_rows == 1
             return pa.table({"peak_worker_memory_mb": [None]})
 
     peak = collect_perf_metrics.fetch_peak_worker_memory_mb(cast(LogClient, FakeLogClient()), "/owner/perf")
