@@ -445,7 +445,10 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     # exact start time. The start time stays set after the string filter clears.
     filtered_row = smoke_page.locator("[data-row]").filter(has_text="validation failed").first
     filtered_row.locator("[data-log-permalink]").click()
-    smoke_page.wait_for_function("() => location.hash.includes('logSeq=')", timeout=5000)
+    smoke_page.wait_for_function(
+        "() => location.hash.includes('logSeq=') && location.hash.includes('attempt=0')",
+        timeout=5000,
+    )
 
     selected_message = filtered_row.locator(":scope > span").last.inner_text()
     filtered_row.locator("[data-log-start]").click()

@@ -523,12 +523,17 @@ function gotoException(delta: number) {
   focusRow(exceptionCursor.step(delta))
 }
 
-/** Pin a row and make the address bar a link back to it. */
-function selectRow(seq: number) {
+/** Pin a row and make the address bar a link back to its exact Task Attempt. */
+function selectRow(seq: number, attemptId?: number) {
   if (seq <= 0) return
   selectedSeq.value = seq
   followTail.value = false
-  router.replace({ query: { ...route.query, logSeq: String(seq) } })
+  const query = {
+    ...route.query,
+    logSeq: String(seq),
+    ...(isTask.value && attemptId !== undefined ? { attempt: String(attemptId) } : {}),
+  }
+  router.replace({ query })
 }
 
 /** Set the log time bound to this row. */
@@ -900,7 +905,7 @@ defineExpose({ selectedAttemptId })
                 data-log-permalink
                 class="text-text-muted tabular-nums hover:text-accent hover:underline"
                 :title="`${isoTimestamp(row.entry)} — click to pin and link to this line`"
-                @click="selectRow(row.seq)"
+                @click="selectRow(row.seq, row.entry.attemptId)"
               >{{ formatLogTime(timestampMs(row.entry.timestamp), timeZone === 'utc') }}</button>
               <button
                 data-log-start
