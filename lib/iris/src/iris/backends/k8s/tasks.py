@@ -69,6 +69,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
     gpu_gang_rack_slice_size,
 )
+from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_BATCH,
@@ -282,9 +283,7 @@ _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 #                 slices, each hard-bound to its own nvlink.domain, with a soft leafgroup
 #                 preference so the racks cluster on one IB leaf group.
 # A cluster whose Topology uses different levels overrides this via
-# kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
-# never invents WorkloadPriorityClass names (a missing one is rejected by
-# Kueue), so a band is stamped only when the config maps it explicitly.
+# kubernetes_provider.kueue.topologies.
 _CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
     COSCHEDULE_LEAFGROUP: KueueTopologyBinding(CW_LABEL_LEAFGROUP, TopologyMode.PREFERRED),
     COSCHEDULE_NVLINK_DOMAIN: KueueTopologyBinding(CW_LABEL_NVLINK_DOMAIN, TopologyMode.REQUIRED),
@@ -524,9 +523,6 @@ class PodConfig:
     # this: dispatching one with no LocalQueue configured raises (Kueue or
     # nothing — there is no non-Kueue colocation fallback).
     local_queue: str = ""
-    # PriorityBand -> WorkloadPriorityClass name. A band with no entry is not
-    # stamped (Kueue uses its default priority); Iris never invents class names.
-    kueue_priority_classes: dict[int, str] = field(default_factory=dict)
     # coscheduling group_by -> KueueTopologyBinding. Defaults to CoreWeave
     # conventions; a group_by with no entry carries no topology annotation.
     kueue_topologies: dict[str, KueueTopologyBinding] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
@@ -936,14 +932,14 @@ def _build_pod_manifest(
     # The composer enforces a configured LocalQueue for the K8s backend.
     assert config.local_queue, "K8s backend requires a Kueue LocalQueue (kubernetes_provider.kueue.cluster_queue)"
     labels[_KUEUE_QUEUE_NAME] = config.local_queue
-    # Stamp an explicit WorkloadPriorityClass only when the cluster maps this band.
-    # An unmapped band is not left unranked: Kueue derives the Workload's priority
-    # from the pod's own PriorityClass (spec.priorityClassName), so the
-    # iris-{production,interactive,batch} bands already order the queue. Iris never
-    # invents a WorkloadPriorityClass name (a missing one is rejected).
-    wpc = config.kueue_priority_classes.get(template.priority_band)
-    if wpc:
-        labels[_KUEUE_PRIORITY_CLASS] = wpc
+    effective_band = (
+        PriorityBand.INTERACTIVE if template.priority_band is PriorityBand.INHERIT else template.priority_band
+    )
+    if is_gang:
+        priority_kind = WorkloadPriorityKind.COSCHEDULED
+    else:
+        priority_kind = WorkloadPriorityKind.ACCELERATOR if has_accelerator else WorkloadPriorityKind.CPU
+    labels[_KUEUE_PRIORITY_CLASS] = workload_priority_class_name(effective_band.name.lower(), priority_kind)
     if is_gang:
         assert template.coscheduling is not None
         group_by = template.coscheduling.group_by
@@ -1049,9 +1045,6 @@ def _build_pod_manifest(
     # The INTERACTIVE floor keeps a request built outside that path (an unset field reads
     # as INHERIT) from silently dropping to the cluster default. A band with no configured
     # class name leaves priorityClassName unset.
-    effective_band = (
-        PriorityBand.INTERACTIVE if template.priority_band is PriorityBand.INHERIT else template.priority_band
-    )
     priority_class_name = config.priority_class_names.get(effective_band)
     if priority_class_name:
         spec["priorityClassName"] = priority_class_name

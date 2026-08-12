@@ -51,9 +51,8 @@ from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory
 
 logger = logging.getLogger(__name__)
 
-# Maps the band names used as keys in KueueConfig.priority_classes (and
-# kubernetes_provider.priority_classes) to the PriorityBand enum stamped on pods.
-_KUEUE_PRIORITY_BANDS = {
+# Maps kubernetes_provider.priority_classes keys to the PriorityBand stamped on Pods.
+_PRIORITY_BANDS = {
     "production": PriorityBand.PRODUCTION,
     "interactive": PriorityBand.INTERACTIVE,
     "batch": PriorityBand.BATCH,
@@ -97,24 +96,14 @@ def make_task_backend(
         label_prefix = config.platform.label_prefix or "iris"
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
 
-        priority_classes: dict[int, str] = {}
-        for band_name, wpc in kp.kueue.priority_classes.items():
-            band = _KUEUE_PRIORITY_BANDS.get(band_name)
-            if band is None:
-                raise ValueError(
-                    f"Unknown Kueue priority band {band_name!r} in kueue.priority_classes; "
-                    f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
-                )
-            priority_classes[band] = wpc
-
         # Start from the iris-{band} defaults; override with any explicit config.
         pod_priority_classes: dict[int, str] = dict(_DEFAULT_PRIORITY_CLASS_NAMES)
         for band_name, pc_name in kp.priority_classes.items():
-            band = _KUEUE_PRIORITY_BANDS.get(band_name)
+            band = _PRIORITY_BANDS.get(band_name)
             if band is None:
                 raise ValueError(
                     f"Unknown priority band {band_name!r} in kubernetes_provider.priority_classes; "
-                    f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
+                    f"valid bands: {sorted(_PRIORITY_BANDS)}"
                 )
             pod_priority_classes[band] = pc_name
 
@@ -145,7 +134,6 @@ def make_task_backend(
                 task_env=dict(config.defaults.task_env),
                 env_secret_name=env_secret_name,
                 local_queue=local_queue,
-                kueue_priority_classes=priority_classes,
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
                 priority_class_names=pod_priority_classes,
             ),
