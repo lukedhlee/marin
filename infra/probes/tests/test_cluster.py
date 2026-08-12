@@ -114,23 +114,23 @@ def test_worker_collection_includes_nodes_beyond_the_first_page():
             cpu_millicores=1_000,
             region="us-east5" if index % 2 == 0 else None,
         )
-        for index in range(501)
+        for index in range(3)
     )
 
     class NodeResourceFake:
         def list_nodes(self, query):
             if query.page_token is None:
-                return Page(nodes[:500], "next", ())
-            return Page(nodes[500:], None, ())
+                return Page(nodes[:2], "next", ())
+            return Page(nodes[2:], None, ())
 
     resource = NodeResourceFake()
     samples = collect_workers(resource)
 
-    assert _find(samples, METRIC_WORKER_HEALTHY, scope=FLEET) == 501
-    assert _find(samples, METRIC_WORKER_CPU_MILLICORES, scope=FLEET) == 501_000
-    assert _find(samples, METRIC_WORKER_TPU_CHIPS, scope=FLEET) == 2_004
-    assert _find(samples, METRIC_WORKER_HEALTHY, region="us-east5") == 251
-    assert _find(samples, METRIC_WORKER_HEALTHY, region="unknown") == 250
+    assert _find(samples, METRIC_WORKER_HEALTHY, scope=FLEET) == 3
+    assert _find(samples, METRIC_WORKER_CPU_MILLICORES, scope=FLEET) == 3_000
+    assert _find(samples, METRIC_WORKER_TPU_CHIPS, scope=FLEET) == 12
+    assert _find(samples, METRIC_WORKER_HEALTHY, region="us-east5") == 2
+    assert _find(samples, METRIC_WORKER_HEALTHY, region="unknown") == 1
 
 
 # ---- jobs -----------------------------------------------------------------

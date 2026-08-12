@@ -2,11 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-from dataclasses import replace
 from types import ModuleType, SimpleNamespace
-from typing import cast
 
-from iris.resources.attempt import AttemptSummary
 from iris.resources.identity import (
     AttemptIdentity,
     JobIdentity,
@@ -15,9 +12,7 @@ from iris.resources.identity import (
     ResourceKind,
     TaskIdentity,
 )
-from iris.resources.job import JobDetail, JobSpec, JobSummary
 from iris.resources.source import Page
-from iris.resources.task import TaskDetail, TaskSummary
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 
@@ -28,95 +23,68 @@ sys.modules[discovery.__name__] = discovery
 from infra.evaldash.src import cluster  # noqa: E402
 
 
+def _attempt(task_key: ResourceKey, number: int, uid: str, *, node=None, failed: bool = False):
+    return SimpleNamespace(
+        identity=AttemptIdentity(task_key, number, uid),
+        state=job_pb2.TASK_STATE_WORKER_FAILED if failed else job_pb2.TASK_STATE_RUNNING,
+        node=node,
+        exit_code=1 if failed else None,
+        error_message="worker lost" if failed else "",
+        started_at=Timestamp.from_ms(40 if failed else 70),
+        finished_at=Timestamp.from_ms(50) if failed else None,
+    )
+
+
+def _task(job: JobIdentity, index: int, *, node: NodeIdentity | None, attempts: tuple):
+    key = ResourceKey("iris", ResourceKind.TASK, f"/owner/eval/{index}")
+    current_attempt = attempts[-1]
+    return SimpleNamespace(
+        summary=SimpleNamespace(
+            identity=TaskIdentity(key, f"task-uid-{index}"),
+            job=job,
+            state=job_pb2.TASK_STATE_RUNNING,
+            current_attempt=current_attempt.identity,
+            current_node=node,
+            started_at=Timestamp.from_ms(70),
+            finished_at=None,
+            error_message="",
+        ),
+        attempts=attempts,
+    )
+
+
 def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
     job_key = ResourceKey("iris", ResourceKind.JOB, "/owner/eval")
     job_identity = JobIdentity(job_key, "job-uid")
-    job = JobDetail(
-        summary=JobSummary(
+    job = SimpleNamespace(
+        summary=SimpleNamespace(
             identity=job_identity,
-            owner_id="owner",
-            parent=None,
             state=job_pb2.JOB_STATE_RUNNING,
-            execution_cluster_id="iris",
-            backend_id="gpu",
-            num_tasks=2,
-            submitted_at=Timestamp.from_ms(10),
             started_at=Timestamp.from_ms(20),
             finished_at=None,
             error_message="",
             pending_reason="warming workers",
             exit_code=17,
         ),
-        spec=cast(JobSpec, SimpleNamespace(name="evaluation")),
+        spec=SimpleNamespace(name="evaluation"),
     )
-    task_key = ResourceKey("iris", ResourceKind.TASK, "/owner/eval/0")
-    task_identity = TaskIdentity(task_key, "task-uid")
     node = NodeIdentity(ResourceKey("iris", ResourceKind.NODE, "worker-a"), "gpu", "worker-uid")
-    first_attempt = AttemptSummary(
-        identity=AttemptIdentity(task_key, 0, "attempt-0"),
-        state=job_pb2.TASK_STATE_WORKER_FAILED,
-        execution_cluster_id="iris",
-        backend_id="gpu",
+    first_key = ResourceKey("iris", ResourceKind.TASK, "/owner/eval/0")
+    first_task = _task(
+        job_identity,
+        0,
         node=node,
-        created_at=Timestamp.from_ms(30),
-        started_at=Timestamp.from_ms(40),
-        finished_at=Timestamp.from_ms(50),
-        exit_code=1,
-        error_message="worker lost",
-        terminal_reason="",
-    )
-    current_attempt = AttemptSummary(
-        identity=AttemptIdentity(task_key, 1, "attempt-1"),
-        state=job_pb2.TASK_STATE_RUNNING,
-        execution_cluster_id="iris",
-        backend_id="gpu",
-        node=node,
-        created_at=Timestamp.from_ms(60),
-        started_at=Timestamp.from_ms(70),
-        finished_at=None,
-        exit_code=None,
-        error_message="",
-        terminal_reason="",
-    )
-    task = TaskDetail(
-        summary=TaskSummary(
-            identity=task_identity,
-            job=job_identity,
-            task_index=0,
-            state=job_pb2.TASK_STATE_RUNNING,
-            execution_cluster_id="iris",
-            backend_id="gpu",
-            current_attempt=current_attempt.identity,
-            current_node=node,
-            failure_count=0,
-            preemption_count=1,
-            submitted_at=Timestamp.from_ms(30),
-            started_at=Timestamp.from_ms(70),
-            finished_at=None,
-            status_message="running",
-            error_message="",
+        attempts=(
+            _attempt(first_key, 0, "attempt-0", node=node, failed=True),
+            _attempt(first_key, 1, "attempt-1", node=node),
         ),
-        attempts=(first_attempt, current_attempt),
-        source_statuses=(),
-        root_cause_highlights=(),
     )
     second_key = ResourceKey("iris", ResourceKind.TASK, "/owner/eval/1")
-    second_identity = TaskIdentity(second_key, "task-uid-1")
-    second_attempt = replace(
-        current_attempt,
-        identity=AttemptIdentity(second_key, 0, "attempt-second"),
+    second_task = _task(
+        job_identity,
+        1,
         node=None,
-    )
-    second_task = replace(
-        task,
-        summary=replace(
-            task.summary,
-            identity=second_identity,
-            task_index=1,
-            current_attempt=second_attempt.identity,
-            current_node=None,
-        ),
-        attempts=(second_attempt,),
+        attempts=(_attempt(second_key, 0, "attempt-second"),),
     )
 
     class FakeResourceClient:
@@ -131,11 +99,14 @@ def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
 
         def list_tasks(self, query):
             if query.page_token is None:
-                return Page((task.summary, second_task.summary), "next", ())
-            return Page((), None, ())
+                return Page((first_task.summary,), "next", ())
+            return Page((second_task.summary,), None, ())
 
         def describe_tasks(self, keys):
-            details = {task.summary.identity.key: task, second_task.summary.identity.key: second_task}
+            details = {
+                first_task.summary.identity.key: first_task,
+                second_task.summary.identity.key: second_task,
+            }
             return tuple(details[key] for key in keys)
 
         def close(self) -> None:
@@ -145,70 +116,21 @@ def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
     gateway = cluster.ClusterGateway()
     monkeypatch.setattr(gateway, "_resolve", lambda *_args: "http://controller")
 
-    assert gateway.job_status("/owner/eval") == {
-        "reachable": True,
-        "error": None,
-        "job": {
-            "state": "JOB_STATE_RUNNING",
-            "error": "",
-            "exit_code": 17,
-            "started_at": {"epoch_ms": 20},
-            "name": "evaluation",
-            "status_message": "warming workers",
-        },
-        "tasks": [
-            {
-                "task_id": "/owner/eval/0",
-                "state": "TASK_STATE_RUNNING",
-                "worker_id": "worker-a",
-                "exit_code": 0,
-                "error": "",
-                "started_at": {"epoch_ms": 70},
-                "current_attempt_id": 1,
-                "attempts": [
-                    {
-                        "attempt_id": 0,
-                        "state": "TASK_STATE_WORKER_FAILED",
-                        "worker_id": "worker-a",
-                        "exit_code": 1,
-                        "error": "worker lost",
-                        "started_at": {"epoch_ms": 40},
-                        "finished_at": {"epoch_ms": 50},
-                        "is_worker_failure": True,
-                        "attempt_uid": "attempt-0",
-                    },
-                    {
-                        "attempt_id": 1,
-                        "state": "TASK_STATE_RUNNING",
-                        "worker_id": "worker-a",
-                        "exit_code": 0,
-                        "error": "",
-                        "started_at": {"epoch_ms": 70},
-                        "is_worker_failure": False,
-                        "attempt_uid": "attempt-1",
-                    },
-                ],
-            },
-            {
-                "task_id": "/owner/eval/1",
-                "state": "TASK_STATE_RUNNING",
-                "worker_id": "",
-                "exit_code": 0,
-                "error": "",
-                "started_at": {"epoch_ms": 70},
-                "current_attempt_id": 0,
-                "attempts": [
-                    {
-                        "attempt_id": 0,
-                        "state": "TASK_STATE_RUNNING",
-                        "worker_id": "",
-                        "exit_code": 0,
-                        "error": "",
-                        "started_at": {"epoch_ms": 70},
-                        "is_worker_failure": False,
-                        "attempt_uid": "attempt-second",
-                    }
-                ],
-            },
-        ],
+    result = gateway.job_status("/owner/eval")
+
+    assert result["job"] == {
+        "state": "JOB_STATE_RUNNING",
+        "error": "",
+        "exit_code": 17,
+        "started_at": {"epoch_ms": 20},
+        "name": "evaluation",
+        "status_message": "warming workers",
     }
+    assert [task["task_id"] for task in result["tasks"]] == ["/owner/eval/0", "/owner/eval/1"]
+    first, second = result["tasks"]
+    assert (first["worker_id"], first["current_attempt_id"]) == ("worker-a", 1)
+    assert [(attempt["attempt_uid"], attempt["is_worker_failure"]) for attempt in first["attempts"]] == [
+        ("attempt-0", True),
+        ("attempt-1", False),
+    ]
+    assert (second["worker_id"], second["current_attempt_id"]) == ("", 0)

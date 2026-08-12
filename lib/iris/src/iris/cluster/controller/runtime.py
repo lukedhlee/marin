@@ -339,8 +339,8 @@ class ControllerRuntime:
         if backend_configs.keys() != self._backends.keys():
             raise ValueError("backend_configs keys must exactly match live backend keys")
         self._backend_configs = dict(backend_configs)
-        # The meta-scheduler routes against what each backend advertises, not the
-        # config. Attributes are immutable, so the routing index is built once.
+        # The meta-scheduler routes against immutable attributes advertised by
+        # each backend, so the routing index is built once.
         self._backend_routing = {
             bid: BackendRouting(advertised=backend.advertised_attributes()) for bid, backend in self._backends.items()
         }
@@ -426,8 +426,8 @@ class ControllerRuntime:
         self._db.register_reopen_hook(self._seed_backend_liveness)
 
         # Wakes the control-tick driver. A submit triggers a schedule-only
-        # mini-tick so submit->assign latency is the schedule time, not gated on
-        # the next reconcile cadence.
+        # mini-tick so submit->assign latency does not wait for the next
+        # reconcile cadence.
         self._tick_wake = threading.Event()
         # Set after a tick commits new ASSIGNED rows so the next tick reconciles
         # immediately (dispatching them) instead of waiting a full poll interval.

@@ -186,7 +186,7 @@ def _ref(cluster_id: str, resource_type: str, resource_id: str, uid: str | None 
 
 
 def attempt_is_worker_failure(state: int) -> bool:
-    """Whether a terminal state (worker-failed or preempted) is a worker-side failure, not an application failure."""
+    """Return whether a terminal state represents a worker-side failure."""
     return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
 
 
@@ -1925,8 +1925,8 @@ class LegacyControllerService:
     ) -> controller_pb2.Controller.ListBackendsResponse:
         """List all backends with aggregate task/worker statistics.
 
-        Counts come from grouped SQL queries joined in Python; capacity health is
-        read from the in-memory autoscaler snapshot, not the DB.
+        Counts come from grouped SQL queries joined in Python. Capacity health
+        comes from the in-memory autoscaler snapshot.
         """
         require_identity()
 

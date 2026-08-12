@@ -133,8 +133,7 @@ class TestAvailabilityProbeEntries:
         constraint = probe.constraints[0]
         assert (constraint.key, constraint.op) == (WellKnownAttribute.DEVICE_VARIANT, ConstraintOp.EQ)
         assert [v.value for v in constraint.values] == ["v5p-8"]
-        assert isinstance(probe.resources.device, TpuDevice)
-        assert probe.resources.device.variant == "v5p-8"
+        assert probe.resources.device == TpuDevice(variant="v5p-8", count=4)
 
     def test_no_probe_when_variant_already_available(self):
         groups = [_group("g", "us-central1-a", variant="v5p-8")]

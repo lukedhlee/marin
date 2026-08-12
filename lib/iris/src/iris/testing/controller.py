@@ -509,7 +509,7 @@ def controller_process_factory(tmp_path) -> Iterator[Callable[..., ControllerPro
             config_kwargs.setdefault("local_state_dir", tmp_path / "local")
             config = ControllerConfig(**config_kwargs)
         elif config_kwargs:
-            raise TypeError("make_controller_process: pass either a config or config kwargs, not both")
+            raise TypeError("make_controller_process: config and config kwargs are mutually exclusive")
         log_stack = build_log_stack(
             log_service_address="",
             local_log_dir=config.local_state_dir / "log-server",

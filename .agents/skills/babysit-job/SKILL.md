@@ -214,7 +214,7 @@ Before declaring the job complete:
 
 ## Notes
 
-- Iris resource commands require canonical names (`/<user>/<job>`), not short
-  names. Use `job describe` for the tracked exact Job; reserve `job list
+- Iris resource commands reject short names. Use canonical names
+  (`/<user>/<job>`). Use `job describe` for the tracked exact Job; reserve `job list
   --prefix` for discovery.
 - Iris monitoring is job-level; cluster updates are not part of normal recovery.

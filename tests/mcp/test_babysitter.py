@@ -1,23 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import marin.mcp.babysitter as babysitter
 import pytest
-from iris.resources.attempt import AttemptSummary
 from iris.resources.endpoint import ProfileResult
-from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
 from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
-from iris.resources.job import (
-    ContainerProfile,
-    ExistingJobPolicy,
-    JobDetail,
-    JobPreemptionPolicy,
-    JobSpec,
-    JobSummary,
-    PriorityBand,
-)
 from iris.resources.source import Page
-from iris.resources.task import TaskDetail, TaskSummary
 from iris.rpc import job_pb2
 from marin.mcp.babysitter import (
     IrisBabysitter,
@@ -42,38 +32,38 @@ def _task_identity() -> TaskIdentity:
     return TaskIdentity(ResourceKey("prod", ResourceKind.TASK, "/alice/train/0"), "task-uid")
 
 
-def _attempt(attempt_number: int, attempt_uid: str) -> AttemptSummary:
-    return AttemptSummary(
+def _attempt(
+    attempt_number: int,
+    attempt_uid: str,
+    *,
+    state: int = job_pb2.TASK_STATE_RUNNING,
+    finished_at: Timestamp | None = None,
+    exit_code: int | None = None,
+    error_message: str = "",
+):
+    return SimpleNamespace(
         identity=AttemptIdentity(_task_identity().key, attempt_number, attempt_uid),
-        state=job_pb2.TASK_STATE_RUNNING,
-        execution_cluster_id="prod",
-        backend_id="east",
+        state=state,
         node=None,
-        created_at=_NOW,
         started_at=_NOW,
-        finished_at=None,
-        exit_code=None,
-        error_message="",
-        terminal_reason="",
+        finished_at=finished_at,
+        exit_code=exit_code,
+        error_message=error_message,
+        terminal_reason="application" if error_message else "",
     )
 
 
-def _running_task_detail() -> TaskDetail:
+def _running_task_detail():
     first = _attempt(1, "attempt-one")
     second = _attempt(2, "attempt-two")
-    return TaskDetail(
-        summary=TaskSummary(
+    return SimpleNamespace(
+        summary=SimpleNamespace(
             identity=_task_identity(),
-            job=_job_identity(),
-            task_index=0,
             state=job_pb2.TASK_STATE_RUNNING,
-            execution_cluster_id="prod",
-            backend_id="east",
             current_attempt=second.identity,
             current_node=None,
             failure_count=1,
             preemption_count=0,
-            submitted_at=_NOW,
             started_at=_NOW,
             finished_at=None,
             status_message="running",
@@ -85,9 +75,9 @@ def _running_task_detail() -> TaskDetail:
     )
 
 
-def _job_detail() -> JobDetail:
-    return JobDetail(
-        summary=JobSummary(
+def _job_detail():
+    return SimpleNamespace(
+        summary=SimpleNamespace(
             identity=_job_identity(),
             owner_id="alice",
             parent=None,
@@ -101,63 +91,45 @@ def _job_detail() -> JobDetail:
             error_message="",
             pending_reason="",
         ),
-        spec=JobSpec(
-            version=1,
+        spec=SimpleNamespace(
             name="train",
-            entrypoint=RuntimeEntrypoint((), CommandEntrypoint(()), {}, {}),
-            resources=ResourceSpec(cpu=1, memory=1024, disk=2048),
-            environment=Environment({}, ()),
-            bundle_id="bundle",
-            scheduling_timeout=None,
+            resources=SimpleNamespace(cpu_millicores=1_000, memory=1024, disk=2048, device=None),
             ports=(),
-            max_task_failures=0,
-            max_retries_failure=0,
-            max_retries_preemption=1,
-            constraints=(),
-            coscheduling=None,
-            replicas=1,
-            timeout=None,
-            fail_if_exists=False,
-            preemption_policy=JobPreemptionPolicy.UNSPECIFIED,
-            existing_job_policy=ExistingJobPolicy.UNSPECIFIED,
-            priority_band=PriorityBand.INHERIT,
-            task_image="",
-            submit_argv=(),
-            client_revision_date="",
-            container_profile=ContainerProfile.UNSPECIFIED,
         ),
     )
+
+
+class _Closeable:
+    def close(self) -> None:
+        pass
+
+
+def _service(monkeypatch, resources, controller=None) -> IrisBabysitter:
+    monkeypatch.setattr(babysitter, "ResourceRpcClient", lambda *_args, **_kwargs: resources)
+    monkeypatch.setattr(babysitter, "ControllerServiceClientSync", lambda *_args, **_kwargs: controller or _Closeable())
+    monkeypatch.setattr(babysitter, "LogServiceClientSync", lambda *_args, **_kwargs: _Closeable())
+    return IrisBabysitter(IrisConnectionConfig("http://controller.test", cluster="prod"))
 
 
 def test_task_status_json_preserves_exact_identity_and_attempt_history():
     task_identity = _task_identity()
     attempt_identity = AttemptIdentity(task_identity.key, 1, "attempt-uid")
-    attempt = AttemptSummary(
-        identity=attempt_identity,
+    attempt = _attempt(
+        1,
+        "attempt-uid",
         state=job_pb2.TASK_STATE_FAILED,
-        execution_cluster_id="prod",
-        backend_id="east",
-        node=None,
-        created_at=_NOW,
-        started_at=_NOW,
         finished_at=Timestamp(2_500),
         exit_code=137,
         error_message="OOMKilled",
-        terminal_reason="application",
     )
-    task = TaskDetail(
-        summary=TaskSummary(
+    task = SimpleNamespace(
+        summary=SimpleNamespace(
             identity=task_identity,
-            job=_job_identity(),
-            task_index=0,
             state=job_pb2.TASK_STATE_FAILED,
-            execution_cluster_id="prod",
-            backend_id="east",
             current_attempt=attempt_identity,
             current_node=None,
             failure_count=1,
             preemption_count=0,
-            submitted_at=_NOW,
             started_at=_NOW,
             finished_at=Timestamp(2_500),
             status_message="",
@@ -182,18 +154,13 @@ def test_task_status_json_preserves_exact_identity_and_attempt_history():
 
 
 def test_job_summary_payload_preserves_summary_task_fields():
-    running_task = TaskSummary(
+    running_task = SimpleNamespace(
         identity=_task_identity(),
-        job=_job_identity(),
         task_index=0,
         state=job_pb2.TASK_STATE_RUNNING,
-        execution_cluster_id="prod",
-        backend_id="east",
-        current_attempt=None,
         current_node=None,
         failure_count=0,
         preemption_count=0,
-        submitted_at=_NOW,
         started_at=_NOW,
         finished_at=None,
         status_message="running",
@@ -211,25 +178,18 @@ def test_job_summary_payload_preserves_summary_task_fields():
 
 def test_job_summary_returns_the_selected_job(monkeypatch):
     class Resources:
-        def describe_job(self, key: ResourceKey) -> JobDetail:
+        def describe_job(self, key: ResourceKey):
             if key != ResourceKey("prod", ResourceKind.JOB, "/alice/train"):
                 raise AssertionError(f"unexpected Job key: {key}")
             return _job_detail()
 
-        def list_tasks(self, _query) -> Page[TaskSummary]:
+        def list_tasks(self, _query):
             return Page((), None, ())
 
         def close(self) -> None:
             pass
 
-    class Closeable:
-        def close(self) -> None:
-            pass
-
-    monkeypatch.setattr(babysitter, "ResourceRpcClient", lambda *_args, **_kwargs: Resources())
-    monkeypatch.setattr(babysitter, "ControllerServiceClientSync", lambda *_args, **_kwargs: Closeable())
-    monkeypatch.setattr(babysitter, "LogServiceClientSync", lambda *_args, **_kwargs: Closeable())
-    service = IrisBabysitter(IrisConnectionConfig("http://controller.test", cluster="prod"))
+    service = _service(monkeypatch, Resources())
 
     payload = service.job_summary("/alice/train")
 
@@ -245,7 +205,7 @@ def test_job_summary_returns_the_selected_job(monkeypatch):
 )
 def test_task_profile_targets_the_exact_resource_attempt(monkeypatch, target, expected_text):
     class Resources:
-        def describe_task(self, _key: ResourceKey) -> TaskDetail:
+        def describe_task(self, _key: ResourceKey):
             return _running_task_detail()
 
         def profile_attempt(self, identity, *, profile, duration) -> ProfileResult:
@@ -261,14 +221,7 @@ def test_task_profile_targets_the_exact_resource_attempt(monkeypatch, target, ex
         def close(self) -> None:
             pass
 
-    class Closeable:
-        def close(self) -> None:
-            pass
-
-    monkeypatch.setattr(babysitter, "ResourceRpcClient", lambda *_args, **_kwargs: Resources())
-    monkeypatch.setattr(babysitter, "ControllerServiceClientSync", lambda *_args, **_kwargs: LegacyController())
-    monkeypatch.setattr(babysitter, "LogServiceClientSync", lambda *_args, **_kwargs: Closeable())
-    service = IrisBabysitter(IrisConnectionConfig("http://controller.test", cluster="prod"))
+    service = _service(monkeypatch, Resources(), LegacyController())
 
     payload = service.profile_task(target=target)
 
@@ -277,7 +230,7 @@ def test_task_profile_targets_the_exact_resource_attempt(monkeypatch, target, ex
 
 def test_system_profile_stays_on_the_process_control_boundary(monkeypatch):
     class Resources:
-        def describe_task(self, _key: ResourceKey) -> TaskDetail:
+        def describe_task(self, _key: ResourceKey):
             raise AssertionError("system profiling must not resolve a Task")
 
         def close(self) -> None:
@@ -290,14 +243,7 @@ def test_system_profile_stays_on_the_process_control_boundary(monkeypatch):
         def close(self) -> None:
             pass
 
-    class Closeable:
-        def close(self) -> None:
-            pass
-
-    monkeypatch.setattr(babysitter, "ResourceRpcClient", lambda *_args, **_kwargs: Resources())
-    monkeypatch.setattr(babysitter, "ControllerServiceClientSync", lambda *_args, **_kwargs: LegacyController())
-    monkeypatch.setattr(babysitter, "LogServiceClientSync", lambda *_args, **_kwargs: Closeable())
-    service = IrisBabysitter(IrisConnectionConfig("http://controller.test", cluster="prod"))
+    service = _service(monkeypatch, Resources(), LegacyController())
 
     payload = service.profile_task(target="/system/process")
 

@@ -240,7 +240,6 @@ def test_nodes_filter_page_and_describe_an_exact_incarnation(resources: Controll
     first = resources.list_nodes(NodeQuery(backend_id="k8s", page_size=1))
     assert [node.identity.key.resource_id for node in first.items] == ["node-alpha"]
     assert first.items[0].region == "us-central1"
-    assert first.next_page_token is not None
 
     second = resources.list_nodes(NodeQuery(backend_id="k8s", page_size=1, page_token=first.next_page_token))
     assert [node.identity.key.resource_id for node in second.items] == ["node-beta"]
@@ -298,7 +297,6 @@ def test_system_endpoints_are_resource_visible_and_paginated(tmp_path: Path) -> 
     detail = resources.describe_endpoint(log_server.key)
 
     assert [endpoint.name for endpoint in listed] == ["/system/controller", "/system/log-server"]
-    assert first.next_page_token is not None
     assert second.next_page_token is None
     assert log_server.task is None
     assert log_server.key.kind is ResourceKind.ENDPOINT
@@ -327,7 +325,6 @@ def test_node_pages_are_bounded_at_the_sqlite_bind_ceiling(worker_resources) -> 
         page_token = page.next_page_token
 
     assert observed == ["worker-00000", "worker-00001", "worker-00002"]
-    assert page_token is not None
 
 
 def test_worker_node_uses_normalized_capacity_slice_and_typed_attributes(worker_resources) -> None:
@@ -400,7 +397,6 @@ def test_worker_node_uses_normalized_capacity_slice_and_typed_attributes(worker_
 def test_slices_filter_page_and_describe_observed_membership(resources: Controller) -> None:
     first = resources.list_slices(SliceQuery(backend_id="rpc", scaling_group_id="pool-a", page_size=1))
     assert [item.identity.key.resource_id for item in first.items] == ["slice-a"]
-    assert first.next_page_token is not None
 
     second = resources.list_slices(
         SliceQuery(

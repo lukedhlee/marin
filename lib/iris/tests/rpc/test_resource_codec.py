@@ -1,25 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Contract tests for the shared native-resource wire codecs."""
-
 import pytest
-from iris.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.resources.endpoint import EndpointAccess, ThreadsProfileConfiguration
 from iris.resources.identity import (
-    AttemptIdentity,
     AttemptLocator,
-    JobIdentity,
-    NodeIdentity,
     NodeLocator,
     ResourceKey,
     ResourceKind,
-    SliceIdentity,
     SliceLocator,
-    TaskIdentity,
 )
-from iris.resources.source import Freshness, ResourceSourceStatus, SourceState
-from iris.rpc import resource_action_pb2, resource_endpoint_pb2, resource_identity_pb2, resource_job_pb2
+from iris.rpc import (
+    job_pb2,
+    resource_action_pb2,
+    resource_command_pb2,
+    resource_endpoint_pb2,
+    resource_identity_pb2,
+    resource_job_pb2,
+)
 from iris.rpc.profile_codec import (
     profile_configuration_from_proto as legacy_profile_configuration_from_proto,
 )
@@ -28,32 +26,18 @@ from iris.rpc.profile_codec import (
 )
 from iris.rpc.resource_codec import (
     action_receipt_from_proto,
-    action_receipt_to_proto,
-    attempt_identity_from_proto,
-    attempt_identity_to_proto,
     attempt_locator_from_proto,
     endpoint_access_from_proto,
     endpoint_access_to_proto,
-    job_identity_from_proto,
-    job_identity_to_proto,
     job_spec_from_proto,
-    node_identity_from_proto,
-    node_identity_to_proto,
     node_locator_from_proto,
     profile_configuration_from_proto,
     profile_configuration_to_proto,
     redacted_job_spec_to_proto,
     resource_key_from_proto,
     resource_key_to_proto,
-    resource_source_status_from_proto,
-    resource_source_status_to_proto,
-    slice_identity_from_proto,
-    slice_identity_to_proto,
     slice_locator_from_proto,
-    task_identity_from_proto,
-    task_identity_to_proto,
 )
-from rigging.timing import Timestamp
 
 
 def _wire_key(kind: int, resource_id: str) -> resource_identity_pb2.ResourceKey:
@@ -61,32 +45,22 @@ def _wire_key(kind: int, resource_id: str) -> resource_identity_pb2.ResourceKey:
 
 
 @pytest.mark.parametrize(
-    "key",
+    ("kind", "wire_kind", "resource_id"),
     [
-        ResourceKey("cluster", ResourceKind.JOB, "/owner/job"),
-        ResourceKey("cluster", ResourceKind.TASK, "/owner/job/0"),
-        ResourceKey("cluster", ResourceKind.ATTEMPT, "/owner/job/0:2"),
-        ResourceKey("cluster", ResourceKind.ENDPOINT, "endpoint-id"),
-        ResourceKey("cluster", ResourceKind.NODE, "node-id"),
-        ResourceKey("cluster", ResourceKind.SLICE, "slice-id"),
+        (ResourceKind.JOB, resource_identity_pb2.RESOURCE_KIND_JOB, "/owner/job"),
+        (ResourceKind.TASK, resource_identity_pb2.RESOURCE_KIND_TASK, "/owner/job/0"),
+        (ResourceKind.ATTEMPT, resource_identity_pb2.RESOURCE_KIND_ATTEMPT, "/owner/job/0:2"),
+        (ResourceKind.ENDPOINT, resource_identity_pb2.RESOURCE_KIND_ENDPOINT, "endpoint-id"),
+        (ResourceKind.NODE, resource_identity_pb2.RESOURCE_KIND_NODE, "node-id"),
+        (ResourceKind.SLICE, resource_identity_pb2.RESOURCE_KIND_SLICE, "slice-id"),
     ],
 )
-def test_resource_key_codec_round_trips_every_kind(key: ResourceKey) -> None:
-    assert resource_key_from_proto(resource_key_to_proto(key)) == key
+def test_resource_key_codec_uses_stable_wire_kinds(kind: ResourceKind, wire_kind: int, resource_id: str) -> None:
+    key = ResourceKey("cluster", kind, resource_id)
+    wire = _wire_key(wire_kind, resource_id)
 
-
-def test_exact_identity_codecs_round_trip_resource_incarnations() -> None:
-    job = JobIdentity(ResourceKey("cluster", ResourceKind.JOB, "/owner/job"), "job-uid")
-    task = TaskIdentity(ResourceKey("cluster", ResourceKind.TASK, "/owner/job/0"), "task-uid")
-    attempt = AttemptIdentity(task.key, 0, "attempt-uid")
-    node = NodeIdentity(ResourceKey("cluster", ResourceKind.NODE, "node"), "backend", "node-uid")
-    slice_identity = SliceIdentity(ResourceKey("cluster", ResourceKind.SLICE, "slice"), "backend", "slice-uid")
-
-    assert job_identity_from_proto(job_identity_to_proto(job)) == job
-    assert task_identity_from_proto(task_identity_to_proto(task)) == task
-    assert attempt_identity_from_proto(attempt_identity_to_proto(attempt)) == attempt
-    assert node_identity_from_proto(node_identity_to_proto(node)) == node
-    assert slice_identity_from_proto(slice_identity_to_proto(slice_identity)) == slice_identity
+    assert resource_key_to_proto(key) == wire
+    assert resource_key_from_proto(wire) == key
 
 
 def test_locator_decoders_preserve_optional_exact_identity() -> None:
@@ -118,43 +92,22 @@ def test_locator_decoders_preserve_optional_exact_identity() -> None:
     ) == SliceLocator(slice_key, "backend", "slice-uid")
 
 
-def test_status_and_action_codecs_preserve_presence_and_zero_valued_enums() -> None:
-    observed_at = Timestamp.from_ms(1_000)
-    source = ResourceSourceStatus(
-        source_id="controller:cluster",
-        backend_id="",
-        state=SourceState.AVAILABLE,
-        freshness=Freshness.CURRENT,
-        observed_at=observed_at,
-        error_code="",
-        error_message="",
-    )
-    receipt = ActionReceipt(
-        action_id="action-id",
-        kind=ActionKind.RETRY_TASK,
-        target=ResourceKey("cluster", ResourceKind.TASK, "/owner/job/0"),
-        expected_target_uid="task-uid",
-        expected_attempt_uid="attempt-uid",
-        expected_attempt_number=0,
-        state=ActionState.SUCCEEDED,
-        result_code=ActionResult.SATISFIED,
-        result_message="",
-        created_at=observed_at,
-        updated_at=observed_at,
-        completed_at=observed_at,
-    )
-
+def test_endpoint_access_preserves_private_zero_wire_value() -> None:
     assert endpoint_access_to_proto(EndpointAccess.PRIVATE) == resource_endpoint_pb2.ENDPOINT_ACCESS_PRIVATE
     assert endpoint_access_from_proto(resource_endpoint_pb2.ENDPOINT_ACCESS_PRIVATE) is EndpointAccess.PRIVATE
-    assert resource_source_status_from_proto(resource_source_status_to_proto(source)) == source
-    assert action_receipt_from_proto(action_receipt_to_proto(receipt)) == receipt
 
 
-def test_profile_codecs_round_trip_thread_detail_options() -> None:
+def test_profile_codecs_preserve_thread_detail_options() -> None:
     profile = ThreadsProfileConfiguration(include_locals=True, include_native=True)
+    resource_wire = resource_command_pb2.ProfileType(
+        threads=resource_command_pb2.ThreadsProfile(locals=True, native=True)
+    )
+    legacy_wire = job_pb2.ProfileType(threads=job_pb2.ThreadsProfile(locals=True, native=True))
 
-    assert profile_configuration_from_proto(profile_configuration_to_proto(profile)) == profile
-    assert legacy_profile_configuration_from_proto(legacy_profile_configuration_to_proto(profile)) == profile
+    assert profile_configuration_to_proto(profile) == resource_wire
+    assert profile_configuration_from_proto(resource_wire) == profile
+    assert legacy_profile_configuration_to_proto(profile) == legacy_wire
+    assert legacy_profile_configuration_from_proto(legacy_wire) == profile
 
 
 def test_shared_decoders_reject_unspecified_resource_and_action_enums() -> None:

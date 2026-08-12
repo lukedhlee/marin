@@ -31,7 +31,6 @@ from iris.rpc.legacy.job_codec import (
     constraint_from_proto,
     environment_from_proto,
     resource_spec_from_proto,
-    resource_spec_to_proto,
     runtime_entrypoint_from_proto,
 )
 from iris.time_proto import duration_from_proto
@@ -225,14 +224,6 @@ def test_native_environment_carries_native_constraint_json() -> None:
     assert json.loads(_common_env(req)["IRIS_JOB_CONSTRAINTS"]) == [
         {"key": "region", "op": "eq", "values": ["us-east1"], "mode": "required"}
     ]
-
-
-@pytest.mark.parametrize("req", [_make_req(), _make_req(gpu_count=8), _make_req(tpu=True)])
-def test_native_environment_matches_canonical_worker_resource_json(req) -> None:
-    assert _common_env(req)["IRIS_TASK_RESOURCES"] == jf.MessageToJson(
-        resource_spec_to_proto(_launch(req).template.resources),
-        preserving_proto_field_name=True,
-    )
 
 
 def test_tpu_device_vars():

@@ -851,7 +851,7 @@ def _build_pod_manifest(
         # CAPACITY_TYPE_ON_DEMAND workers.
         requests["cpu"] = f"{res.cpu_millicores}m"
     if res.memory:
-        # Memory stays a hard cap — overshoot is fatal, not just slow.
+        # Memory is a hard cap; overshoot is fatal.
         # Memory-backed emptyDir usage is charged to this same cgroup.
         memory_limit_bytes = res.memory
         limits["memory"] = str(res.memory)

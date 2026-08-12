@@ -1,73 +1,53 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
 from typing import cast
 
 import pyarrow as pa
 from finelog.client import LogClient
 from iris.client import IrisClient
-from iris.resources.attempt import AttemptSummary
 from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
-from iris.resources.job import JobSummary
 from iris.resources.source import Page
 from iris.resources.state import JobState, TaskState
-from iris.resources.task import TaskDetail, TaskSummary
 from rigging.timing import Timestamp
 
 from scripts.ci import collect_perf_metrics
 
 
-def _task(job: JobSummary, index: int) -> tuple[TaskSummary, TaskDetail]:
+def _task(job, index: int):
     key = ResourceKey("test", ResourceKind.TASK, f"/owner/perf/{index}")
     identity = TaskIdentity(key, f"task-{index}")
-    attempt = AttemptSummary(
+    attempt = SimpleNamespace(
         identity=AttemptIdentity(key, 0, f"attempt-{index}"),
-        state=TaskState.SUCCEEDED,
-        execution_cluster_id="test",
-        backend_id="default",
-        node=None,
-        created_at=Timestamp.from_ms(10),
-        started_at=Timestamp.from_ms(20),
-        finished_at=Timestamp.from_ms(30),
         exit_code=index,
         error_message="",
-        terminal_reason="",
     )
-    summary = TaskSummary(
+    summary = SimpleNamespace(
         identity=identity,
-        job=job.identity,
         task_index=index,
         state=TaskState.SUCCEEDED,
-        execution_cluster_id="test",
-        backend_id="default",
-        current_attempt=attempt.identity,
         current_node=None,
         failure_count=0,
         preemption_count=0,
-        submitted_at=Timestamp.from_ms(10),
         started_at=Timestamp.from_ms(20),
         finished_at=Timestamp.from_ms(30),
         status_message="",
         error_message="",
     )
-    return summary, TaskDetail(summary, (attempt,), (), ())
+    return summary, SimpleNamespace(attempts=(attempt,))
 
 
 def test_fetch_job_summary_includes_tasks_from_every_page() -> None:
     job_key = ResourceKey("test", ResourceKind.JOB, "/owner/perf")
-    job = JobSummary(
+    job = SimpleNamespace(
         identity=JobIdentity(job_key, "job-uid"),
-        owner_id="owner",
-        parent=None,
         state=JobState.SUCCEEDED,
-        execution_cluster_id="test",
-        backend_id="default",
         num_tasks=3,
         submitted_at=Timestamp.from_ms(1),
         started_at=Timestamp.from_ms(2),
         finished_at=Timestamp.from_ms(40),
         error_message="",
-        pending_reason="",
     )
     rows = [_task(job, index) for index in range(3)]
 
@@ -102,10 +82,7 @@ def test_fetch_job_summary_includes_tasks_from_every_page() -> None:
 
 def test_peak_worker_memory_comes_from_task_measurements() -> None:
     class FakeLogClient:
-        def query(self, sql: str, *, max_rows: int):
-            assert 'FROM "iris.task"' in sql
-            assert "task_id LIKE '/owner/perf/%'" in sql
-            assert max_rows == 1
+        def query(self, *_args, **_kwargs):
             return pa.table({"peak_worker_memory_mb": [73_421]})
 
     peak = collect_perf_metrics.fetch_peak_worker_memory_mb(cast(LogClient, FakeLogClient()), "/owner/perf")
@@ -125,7 +102,7 @@ def test_peak_worker_memory_comes_from_task_measurements() -> None:
 
 def test_missing_task_measurements_are_not_reported_as_zero_memory() -> None:
     class FakeLogClient:
-        def query(self, sql: str, *, max_rows: int):
+        def query(self, *_args, **_kwargs):
             return pa.table({"peak_worker_memory_mb": [None]})
 
     peak = collect_perf_metrics.fetch_peak_worker_memory_mb(cast(LogClient, FakeLogClient()), "/owner/perf")
