@@ -368,18 +368,122 @@ def test_dashboard_task_detail_selects_an_exact_attempt(smoke_cluster, verbose_j
     )
 
 
+def _wait_for_task_log_marker(
+    cluster: IrisTestCluster, task_id: str, attempt_id: int, marker: str, *, timeout: float = 60.0
+) -> None:
+    """Wait for an Attempt's asynchronously shipped logs to become queryable."""
+    source = f"{task_id}:{attempt_id}"
+
+    def marker_is_available() -> bool:
+        request = logging_pb2.FetchLogsRequest(
+            source=source,
+            match_scope=logging_pb2.MATCH_SCOPE_EXACT,
+            tail=True,
+            max_lines=1000,
+        )
+        return any(marker in entry.data for entry in cluster.log_client.fetch_logs(request).entries)
+
+    ExponentialBackoff(initial=0.1, maximum=1.0).wait_until_or_raise(
+        marker_is_available,
+        timeout=Duration.from_seconds(timeout),
+        error_message=f"log marker {marker!r} for {source} not queryable within {timeout:.0f}s",
+    )
+
+
+def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
+    """Task logs preserve local search, server regex filtering, and time controls."""
+    task_status = smoke_cluster.task_status(verbose_job)
+    task_id = task_status.task_id
+    job_id = verbose_job.job_id.to_wire()
+
+    _wait_for_task_log_marker(smoke_cluster, task_id, task_status.current_attempt_id, "DONE: all lines emitted")
+    _open_task_detail(smoke_page, smoke_cluster.url, job_id, task_id)
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('DONE: all lines emitted')",
+        timeout=10_000,
+    )
+    smoke_screenshot(
+        "task-logs-default",
+        "Exact Attempt logs with search, filtering, permalink, and time controls",
+    )
+    assert_visible(smoke_page, "text=No exceptions")
+
+    # Search marks matching lines in place. "validation failed" only appears in
+    # ERROR lines, so the INFO lines around them must survive — that is the whole
+    # point of search being distinct from filter.
+    search_input = "input[placeholder^='Search loaded lines']"
+    smoke_page.fill(search_input, "validation failed")
+    smoke_page.wait_for_function(
+        "() => document.querySelectorAll('mark').length > 0 && "
+        "document.body.textContent.includes('processing data batch')",
+        timeout=5000,
+    )
+    smoke_screenshot(
+        "task-logs-searched",
+        "Task detail page with a log search box populated; matching text is highlighted in place "
+        "and non-matching log lines are still visible around the highlights.",
+    )
+
+    # The regex filter re-queries the server and drops non-matching lines entirely. It
+    # applies on Enter, not on every keystroke. Keep this pattern literal-compatible
+    # because CI runs Iris smoke tests against the latest published Finelog server;
+    # the Rust test covers regex metacharacters against this branch's server source.
+    filter_input = "input[placeholder^='Filter regex']"
+    smoke_page.fill(filter_input, "validation failed")
+    smoke_page.press(filter_input, "Enter")
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('validation failed') && "
+        "!document.body.textContent.includes('processing data batch')",
+        timeout=5000,
+    )
+    smoke_screenshot(
+        "task-logs-filtered",
+        "Task detail page with log filter input populated and filtered log lines visible in the log viewer.",
+    )
+
+    # The timestamp action still makes a permalink. The next control sets an
+    # exact start time. The start time stays set after the string filter clears.
+    filtered_row = smoke_page.locator("[data-row]").filter(has_text="validation failed").first
+    filtered_row.locator("[data-log-permalink]").click()
+    smoke_page.wait_for_function("() => location.hash.includes('logSeq=')", timeout=5000)
+
+    selected_message = filtered_row.locator(":scope > span").last.inner_text()
+    filtered_row.locator("[data-log-start]").click()
+    since_input = "input[type='datetime-local']"
+    smoke_page.wait_for_function(
+        "() => document.querySelector(\"input[type='datetime-local']\")?.value.length > 0",
+        timeout=5000,
+    )
+    locked_since = smoke_page.input_value(since_input)
+    assert locked_since
+    smoke_page.locator("[data-row]").filter(has_text=selected_message).wait_for(timeout=5000)
+
+    smoke_page.get_by_role("button", name="Clear filter").click()
+    smoke_page.wait_for_function(
+        "() => document.querySelector(\"input[placeholder^='Filter regex']\")?.value === '' && "
+        "document.body.textContent.includes('processing data batch')",
+        timeout=5000,
+    )
+    assert smoke_page.input_value(since_input) == locked_since
+
+
 def test_dashboard_failed_task_retains_terminal_attempt(smoke_cluster, smoke_page, smoke_screenshot):
-    """A failed Task keeps its terminal state and exact Attempt visible."""
+    """A failed Task keeps its terminal Attempt visible and locates its traceback."""
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-exception")
     smoke_cluster.wait(failed, timeout=smoke_cluster.job_timeout)
 
     task_status = smoke_cluster.task_status(failed)
+    _wait_for_task_log_marker(smoke_cluster, task_status.task_id, task_status.current_attempt_id, "Traceback")
     _open_task_detail(smoke_page, smoke_cluster.url, failed.job_id.to_wire(), task_status.task_id)
     assert_visible(smoke_page, "text=Failed")
     assert_visible(smoke_page, f"text=Attempt {task_status.current_attempt_id}")
+    jump = smoke_page.locator("button", has_text="Jump to exception")
+    jump.wait_for(timeout=10_000)
+    jump.click()
+    assert_visible(smoke_page, "text=/Exception 1 \\/ \\d+/")
     smoke_screenshot(
         "failed-task",
-        "Failed Task detail retaining the exact terminal Attempt",
+        "Failed Task retaining the exact terminal Attempt and highlighted traceback",
     )
 
 
