@@ -21,9 +21,11 @@ on `hai-gcp-models` (`GcpIam`, driven by `src/iac/gcp/iam_data.yaml`; see "User 
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
-used by `infra/echo`, `infra/evaldash`, and `infra/grafana`) and `iac.iris` (always-on Iris
+used by `infra/echo`, `infra/evaldash`, and `infra/grafana`), `iac.iris` (always-on Iris
 service jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky` and
-`infra/xprof`). Every `CloudRunService` grants `roles/iap.httpsResourceAccessor` to the
+`infra/xprof`), and `iac.kubernetes.finelog` (a custom image plus stateful Kubernetes resources,
+used by [`infra/finelog`](../finelog/README.md)). Every `CloudRunService` grants
+`roles/iap.httpsResourceAccessor` to the
 OpenAthena Workspace domain and the Loom VM service account. It also registers the shared Marin
 desktop OAuth client as a programmatic audience. The `iap_members` and
 `iap_programmatic_clients` arguments are only for service-specific exceptions.
@@ -246,8 +248,9 @@ project's paths and calls `./.github/actions/pulumi-preview` with its own `stack
 
 ## Unsupported
 
-- **Signing keys** (`iris-<cluster>-signing-key`, `finelog-<cluster>-signing-key`) stay manual,
-  minted with `iris cluster init-keys` — the key material must never pass through Pulumi state.
+- **Signing keys** (`iris-<cluster>-signing-key`, `finelog-<cluster>-signing-key`) stay manual.
+  Iris keys are minted with `iris cluster init-keys`; Finelog forwarding keys follow
+  [`lib/finelog/OPS.md`](../../lib/finelog/OPS.md). Their values never pass through Pulumi state.
 
 ## Future work
 
@@ -260,7 +263,6 @@ project's paths and calls `./.github/actions/pulumi-preview` with its own `stack
   Clusters currently mix per-cluster buckets (`cw-us-west-04a`) and shared cross-region reuse
   (`cw-rno2a`/`cw-us-east-08a` both read/write `marin-us-east-02a`'s bucket) — undecided whether
   Pulumi should provision a bucket per cluster or this reuse is the standing choice.
-- **finelog server Deployment**: a planned `FinelogServer` component, not yet built.
 - **Federation peers**: `lib/iris/config/marin.yaml`/`marin-dev.yaml`'s `peers:` entries are
   hand-edited per cluster; generate or CI-validate the peer set from the cluster configs so a
   cluster can't be reachable-but-unregistered or registered-but-missing.
