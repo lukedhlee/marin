@@ -339,7 +339,7 @@ def test_batch_describe_tasks_returns_ordered_details_with_attempts(journey) -> 
     ]
 
 
-def test_batch_describe_many_failed_tasks_does_not_fan_out_to_finelog(journey, monkeypatch) -> None:
+def test_batch_task_details_omit_per_task_log_enrichment(journey, monkeypatch) -> None:
     job = journey.submit("batch-failed", tasks=20)
     journey.settle()
     for index in range(job.tasks):

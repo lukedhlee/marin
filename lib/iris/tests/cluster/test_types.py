@@ -156,11 +156,6 @@ def test_job_name_dashboard_url(base: str):
     assert job.job_dashboard_url(base, "cw-west") == (
         "https://iris.oa.dev/#/job/cw-west/%2Frav%2Fdatakit-ref-smoke-20260604-135004"
     )
-    # Nested task names percent-encode every slash.
-    task = JobName.from_string("/rav/root/child/0")
-    assert task.task_dashboard_url("https://iris.oa.dev", "local") == (
-        "https://iris.oa.dev/#/task/local/%2Frav%2Froot%2Fchild%2F0"
-    )
 
 
 @pytest.mark.parametrize(
@@ -237,17 +232,6 @@ def test_task_name_job_id_and_task_index():
     tn = TaskAttempt.from_wire("/alice/parent/child/0:2")
     assert tn.job_id == JobName.from_string("/alice/parent/child")
     assert tn.task_index == 0
-
-
-def test_task_name_with_and_without_attempt():
-    tn = TaskAttempt.from_wire("/alice/job/0")
-    with_attempt = tn.with_attempt(7)
-    assert with_attempt.attempt_id == 7
-    assert with_attempt.task_id == tn.task_id
-
-    without = with_attempt.without_attempt()
-    assert without.attempt_id is None
-    assert without.task_id == tn.task_id
 
 
 def test_task_name_from_components():

@@ -201,13 +201,6 @@ def attempt_identity_from_proto(value: resource_identity_pb2.AttemptIdentity) ->
     return AttemptIdentity(resource_key_from_proto(value.task), value.attempt_number, value.attempt_uid)
 
 
-def attempt_locator_to_proto(value: AttemptLocator) -> resource_identity_pb2.AttemptLocator:
-    result = resource_identity_pb2.AttemptLocator(task=resource_key_to_proto(value.task))
-    if value.attempt_number is not None:
-        result.attempt_number = value.attempt_number
-    return result
-
-
 def attempt_locator_from_proto(value: resource_identity_pb2.AttemptLocator) -> AttemptLocator:
     return AttemptLocator(
         resource_key_from_proto(value.task),
@@ -225,13 +218,6 @@ def node_identity_to_proto(value: NodeIdentity) -> resource_identity_pb2.NodeIde
 
 def node_identity_from_proto(value: resource_identity_pb2.NodeIdentity) -> NodeIdentity:
     return NodeIdentity(resource_key_from_proto(value.key), value.backend_id, value.node_uid)
-
-
-def node_locator_to_proto(value: NodeLocator) -> resource_identity_pb2.NodeLocator:
-    result = resource_identity_pb2.NodeLocator(key=resource_key_to_proto(value.key), backend_id=value.backend_id)
-    if value.node_uid is not None:
-        result.node_uid = value.node_uid
-    return result
 
 
 def node_locator_from_proto(value: resource_identity_pb2.NodeLocator) -> NodeLocator:
@@ -252,13 +238,6 @@ def slice_identity_to_proto(value: SliceIdentity) -> resource_identity_pb2.Slice
 
 def slice_identity_from_proto(value: resource_identity_pb2.SliceIdentity) -> SliceIdentity:
     return SliceIdentity(resource_key_from_proto(value.key), value.backend_id, value.slice_uid)
-
-
-def slice_locator_to_proto(value: SliceLocator) -> resource_identity_pb2.SliceLocator:
-    result = resource_identity_pb2.SliceLocator(key=resource_key_to_proto(value.key), backend_id=value.backend_id)
-    if value.slice_uid is not None:
-        result.slice_uid = value.slice_uid
-    return result
 
 
 def slice_locator_from_proto(value: resource_identity_pb2.SliceLocator) -> SliceLocator:

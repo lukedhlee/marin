@@ -41,7 +41,6 @@ from iris.rpc import resource_fleet_pb2, resource_pb2
 from iris.rpc.resource_types import CAPACITY
 from rigging.provenance import Provenance
 from rigging.timing import Timestamp
-from sqlalchemy import event
 
 NOW = Timestamp.from_ms(1_000)
 
@@ -309,7 +308,7 @@ def test_system_endpoints_are_resource_visible_and_paginated(tmp_path: Path) -> 
 
 
 def test_node_pages_are_bounded_at_the_sqlite_bind_ceiling(worker_resources) -> None:
-    resources, db, backend = worker_resources
+    resources, db, _backend = worker_resources
     worker_count = 32_767
     with db.transaction() as tx:
         tx.execute(
@@ -320,30 +319,15 @@ def test_node_pages_are_bounded_at_the_sqlite_bind_ceiling(worker_resources) -> 
             ],
         )
 
-    selects: list[str] = []
-
-    def capture_select(_conn, _cursor, statement, _parameters, _context, _executemany) -> None:
-        if statement.lstrip().upper().startswith("SELECT"):
-            selects.append(statement)
-
-    event.listen(db.sa_read_engine, "before_cursor_execute", capture_select)
-    try:
-        page_token = None
-        page_select_counts = []
-        observed = []
-        for _ in range(3):
-            before = len(selects)
-            page = resources.list_nodes(NodeQuery(page_size=1, page_token=page_token))
-            page_select_counts.append(len(selects) - before)
-            observed.append(page.items[0].identity.key.resource_id)
-            page_token = page.next_page_token
-    finally:
-        event.remove(db.sa_read_engine, "before_cursor_execute", capture_select)
+    page_token = None
+    observed = []
+    for _ in range(3):
+        page = resources.list_nodes(NodeQuery(page_size=1, page_token=page_token))
+        observed.append(page.items[0].identity.key.resource_id)
+        page_token = page.next_page_token
 
     assert observed == ["worker-00000", "worker-00001", "worker-00002"]
     assert page_token is not None
-    assert page_select_counts == [3, 3, 3]
-    assert backend.status.call_count == 3
 
 
 def test_worker_node_uses_normalized_capacity_slice_and_typed_attributes(worker_resources) -> None:

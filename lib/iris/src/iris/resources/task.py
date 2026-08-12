@@ -9,11 +9,7 @@ from rigging.timing import Timestamp
 
 from iris.resources.attempt import AttemptSummary
 from iris.resources.identity import AttemptIdentity, JobIdentity, NodeIdentity, ResourceKey, TaskIdentity
-from iris.resources.source import (
-    MAX_ROOT_CAUSE_HIGHLIGHT,
-    MAX_ROOT_CAUSE_HIGHLIGHTS,
-    ResourceSourceStatus,
-)
+from iris.resources.source import ResourceSourceStatus
 from iris.resources.state import TaskState
 
 
@@ -54,9 +50,3 @@ class TaskDetail:
     attempts: tuple[AttemptSummary, ...]
     source_statuses: tuple[ResourceSourceStatus, ...]
     root_cause_highlights: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        if len(self.root_cause_highlights) > MAX_ROOT_CAUSE_HIGHLIGHTS:
-            raise ValueError(f"root_cause_highlights exceeds {MAX_ROOT_CAUSE_HIGHLIGHTS} entries")
-        if any(len(highlight) > MAX_ROOT_CAUSE_HIGHLIGHT for highlight in self.root_cause_highlights):
-            raise ValueError(f"root-cause highlight exceeds {MAX_ROOT_CAUSE_HIGHLIGHT} characters")

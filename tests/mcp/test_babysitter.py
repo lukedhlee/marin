@@ -209,12 +209,11 @@ def test_job_summary_payload_preserves_summary_task_fields():
     assert "resource_usage" not in payload
 
 
-def test_job_summary_describes_the_exact_resource_without_prefix_scanning(monkeypatch):
-    requested: list[ResourceKey] = []
-
+def test_job_summary_returns_the_selected_job(monkeypatch):
     class Resources:
         def describe_job(self, key: ResourceKey) -> JobDetail:
-            requested.append(key)
+            if key != ResourceKey("prod", ResourceKind.JOB, "/alice/train"):
+                raise AssertionError(f"unexpected Job key: {key}")
             return _job_detail()
 
         def list_tasks(self, _query) -> Page[TaskSummary]:
@@ -235,7 +234,6 @@ def test_job_summary_describes_the_exact_resource_without_prefix_scanning(monkey
     payload = service.job_summary("/alice/train")
 
     assert payload["data"]["job_id"] == "/alice/train"
-    assert requested == [ResourceKey("prod", ResourceKind.JOB, "/alice/train")]
 
 
 @pytest.mark.parametrize(

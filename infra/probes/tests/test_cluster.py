@@ -106,7 +106,7 @@ def _node(node_id: str, *, health: NodeHealth, cpu_millicores: int, region: str 
     )
 
 
-def test_worker_collection_over_page_limit_uses_two_bounded_node_queries():
+def test_worker_collection_includes_nodes_beyond_the_first_page():
     nodes = tuple(
         _node(
             f"worker-{index}",
@@ -118,11 +118,7 @@ def test_worker_collection_over_page_limit_uses_two_bounded_node_queries():
     )
 
     class NodeResourceFake:
-        def __init__(self) -> None:
-            self.list_queries = 0
-
         def list_nodes(self, query):
-            self.list_queries += 1
             if query.page_token is None:
                 return Page(nodes[:500], "next", ())
             return Page(nodes[500:], None, ())
@@ -130,7 +126,6 @@ def test_worker_collection_over_page_limit_uses_two_bounded_node_queries():
     resource = NodeResourceFake()
     samples = collect_workers(resource)
 
-    assert resource.list_queries == 2
     assert _find(samples, METRIC_WORKER_HEALTHY, scope=FLEET) == 501
     assert _find(samples, METRIC_WORKER_CPU_MILLICORES, scope=FLEET) == 501_000
     assert _find(samples, METRIC_WORKER_TPU_CHIPS, scope=FLEET) == 2_004

@@ -32,7 +32,6 @@ from iris.rpc.resource_codec import (
     attempt_identity_from_proto,
     attempt_identity_to_proto,
     attempt_locator_from_proto,
-    attempt_locator_to_proto,
     endpoint_access_from_proto,
     endpoint_access_to_proto,
     job_identity_from_proto,
@@ -41,7 +40,6 @@ from iris.rpc.resource_codec import (
     node_identity_from_proto,
     node_identity_to_proto,
     node_locator_from_proto,
-    node_locator_to_proto,
     profile_configuration_from_proto,
     profile_configuration_to_proto,
     redacted_job_spec_to_proto,
@@ -52,11 +50,14 @@ from iris.rpc.resource_codec import (
     slice_identity_from_proto,
     slice_identity_to_proto,
     slice_locator_from_proto,
-    slice_locator_to_proto,
     task_identity_from_proto,
     task_identity_to_proto,
 )
 from rigging.timing import Timestamp
+
+
+def _wire_key(kind: int, resource_id: str) -> resource_identity_pb2.ResourceKey:
+    return resource_identity_pb2.ResourceKey(cluster_id="cluster", kind=kind, resource_id=resource_id)
 
 
 @pytest.mark.parametrize(
@@ -88,43 +89,33 @@ def test_exact_identity_codecs_round_trip_resource_incarnations() -> None:
     assert slice_identity_from_proto(slice_identity_to_proto(slice_identity)) == slice_identity
 
 
-@pytest.mark.parametrize(
-    ("locator", "to_proto", "from_proto"),
-    [
-        (
-            AttemptLocator(ResourceKey("cluster", ResourceKind.TASK, "/owner/job/0"), None),
-            attempt_locator_to_proto,
-            attempt_locator_from_proto,
-        ),
-        (
-            AttemptLocator(ResourceKey("cluster", ResourceKind.TASK, "/owner/job/0"), 0),
-            attempt_locator_to_proto,
-            attempt_locator_from_proto,
-        ),
-        (
-            NodeLocator(ResourceKey("cluster", ResourceKind.NODE, "node"), "backend"),
-            node_locator_to_proto,
-            node_locator_from_proto,
-        ),
-        (
-            NodeLocator(ResourceKey("cluster", ResourceKind.NODE, "node"), "backend", "node-uid"),
-            node_locator_to_proto,
-            node_locator_from_proto,
-        ),
-        (
-            SliceLocator(ResourceKey("cluster", ResourceKind.SLICE, "slice"), "backend"),
-            slice_locator_to_proto,
-            slice_locator_from_proto,
-        ),
-        (
-            SliceLocator(ResourceKey("cluster", ResourceKind.SLICE, "slice"), "backend", "slice-uid"),
-            slice_locator_to_proto,
-            slice_locator_from_proto,
-        ),
-    ],
-)
-def test_locator_codecs_preserve_optional_exact_identity(locator, to_proto, from_proto) -> None:
-    assert from_proto(to_proto(locator)) == locator
+def test_locator_decoders_preserve_optional_exact_identity() -> None:
+    task_key = ResourceKey("cluster", ResourceKind.TASK, "/owner/job/0")
+    wire_task = _wire_key(resource_identity_pb2.RESOURCE_KIND_TASK, task_key.resource_id)
+    assert attempt_locator_from_proto(resource_identity_pb2.AttemptLocator(task=wire_task)) == AttemptLocator(
+        task_key, None
+    )
+    assert attempt_locator_from_proto(
+        resource_identity_pb2.AttemptLocator(task=wire_task, attempt_number=0)
+    ) == AttemptLocator(task_key, 0)
+
+    node_key = ResourceKey("cluster", ResourceKind.NODE, "node")
+    wire_node = _wire_key(resource_identity_pb2.RESOURCE_KIND_NODE, node_key.resource_id)
+    assert node_locator_from_proto(
+        resource_identity_pb2.NodeLocator(key=wire_node, backend_id="backend")
+    ) == NodeLocator(node_key, "backend")
+    assert node_locator_from_proto(
+        resource_identity_pb2.NodeLocator(key=wire_node, backend_id="backend", node_uid="node-uid")
+    ) == NodeLocator(node_key, "backend", "node-uid")
+
+    slice_key = ResourceKey("cluster", ResourceKind.SLICE, "slice")
+    wire_slice = _wire_key(resource_identity_pb2.RESOURCE_KIND_SLICE, slice_key.resource_id)
+    assert slice_locator_from_proto(
+        resource_identity_pb2.SliceLocator(key=wire_slice, backend_id="backend")
+    ) == SliceLocator(slice_key, "backend")
+    assert slice_locator_from_proto(
+        resource_identity_pb2.SliceLocator(key=wire_slice, backend_id="backend", slice_uid="slice-uid")
+    ) == SliceLocator(slice_key, "backend", "slice-uid")
 
 
 def test_status_and_action_codecs_preserve_presence_and_zero_valued_enums() -> None:

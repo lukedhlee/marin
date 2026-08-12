@@ -294,14 +294,3 @@ def test_generic_preempted_attempt_update_preserves_retry_policy(journey) -> Non
     assert operation.affected[0] == operation.requested_ref
     assert duplicate.ref == operation.ref
     assert duplicate.resolved_ref == operation.resolved_ref
-
-
-def test_service_info_reports_backend_contributions_to_registered_resources(journey) -> None:
-    response = _service(journey).get_service_info(resource_pb2.GetServiceInfoRequest(), None)
-    installed = {
-        (capability.backend_id, capability.type): tuple(capability.verbs) for capability in response.backend_resources
-    }
-
-    assert installed[("default", "iris/attempt")] == ("update",)
-    assert installed[("default", "iris/exec-session")] == ("create",)
-    assert installed[("default", "iris/profile-capture")] == ("create",)

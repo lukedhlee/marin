@@ -56,14 +56,11 @@ from rigging.timing import Timestamp
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
-from sqlalchemy.exc import SQLAlchemyError
 
 from iris.cluster.controller.persistence.caches import CacheRegistry
 from iris.cluster.controller.persistence.schema import metadata, schema_migrations_table
 
 logger = logging.getLogger(__name__)
-
-DatabaseError = SQLAlchemyError
 
 
 def _install_pragmas(dbapi_conn, auth_path_str: str | None) -> None:

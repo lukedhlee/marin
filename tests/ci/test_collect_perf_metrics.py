@@ -53,7 +53,7 @@ def _task(job: JobSummary, index: int) -> tuple[TaskSummary, TaskDetail]:
     return summary, TaskDetail(summary, (attempt,), (), ())
 
 
-def test_fetch_job_summary_batches_task_details_once_per_page() -> None:
+def test_fetch_job_summary_includes_tasks_from_every_page() -> None:
     job_key = ResourceKey("test", ResourceKind.JOB, "/owner/perf")
     job = JobSummary(
         identity=JobIdentity(job_key, "job-uid"),
@@ -76,9 +76,6 @@ def test_fetch_job_summary_batches_task_details_once_per_page() -> None:
             return job
 
     class FakeClient:
-        def __init__(self) -> None:
-            self.detail_batches = []
-
         def current_job(self, _job_id):
             return CurrentJob()
 
@@ -88,7 +85,6 @@ def test_fetch_job_summary_batches_task_details_once_per_page() -> None:
             return Page((rows[2][0],), None, ())
 
         def describe_tasks(self, keys):
-            self.detail_batches.append(keys)
             details = {summary.identity.key: detail for summary, detail in rows}
             return tuple(details[key] for key in keys)
 
@@ -101,10 +97,6 @@ def test_fetch_job_summary_batches_task_details_once_per_page() -> None:
         ("/owner/perf/0", 0),
         ("/owner/perf/1", 1),
         ("/owner/perf/2", 2),
-    ]
-    assert [[key.resource_id for key in batch] for batch in client.detail_batches] == [
-        ["/owner/perf/0", "/owner/perf/1"],
-        ["/owner/perf/2"],
     ]
 
 

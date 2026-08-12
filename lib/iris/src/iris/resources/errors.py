@@ -58,15 +58,3 @@ class ActionIdempotencyConflict(ResourceError):
 
 class ResourceSourceUnavailable(ResourceError):
     """A required exact live source is unavailable."""
-
-
-class UnsupportedResourceVerb(ResourceError):
-    """The selected backend does not implement a resource operation."""
-
-
-class UnsupportedResourceSchema(ResourceError):
-    """The database schema is not an accepted resource schema."""
-
-
-class AmbiguousResourceMigration(ResourceError):
-    """Source rows have conflicting identities or coordinates."""

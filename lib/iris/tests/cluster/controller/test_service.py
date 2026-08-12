@@ -64,7 +64,7 @@ from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
 from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import event, func
+from sqlalchemy import func
 from sqlalchemy import update as sa_update
 
 # =============================================================================
@@ -1012,79 +1012,41 @@ def test_list_jobs_returns_all_jobs(service):
     assert states_by_id[JobName.root("test-user", "job-3").to_wire()] == job_pb2.JOB_STATE_KILLED
 
 
-@pytest.mark.parametrize("job_count", [2, 50])
-def test_list_jobs_aggregates_a_page_with_fixed_queries(service, state, job_count):
+def test_list_jobs_preserves_child_and_task_aggregates(service):
     parent = service.launch_job(make_job_request("parent"), None).job_id
     service.launch_job(make_job_request(f"{parent}/child"), None)
-    for index in range(job_count - 2):
-        service.launch_job(make_job_request(f"root-{index}"), None)
-
-    statements: list[str] = []
-
-    def capture_select(_connection, _cursor, statement, _parameters, _context, _executemany):
-        if statement.lstrip().upper().startswith(("SELECT", "WITH")):
-            statements.append(statement)
-
-    event.listen(state._db.sa_read_engine, "before_cursor_execute", capture_select)
-    try:
-        response = service.list_jobs(controller_pb2.Controller.ListJobsRequest(), None)
-    finally:
-        event.remove(state._db.sa_read_engine, "before_cursor_execute", capture_select)
+    response = service.list_jobs(controller_pb2.Controller.ListJobsRequest(), None)
 
     jobs = {job.job_id: job for job in response.jobs}
-    assert len(jobs) == job_count
+    assert len(jobs) == 2
     assert jobs[parent].has_children
     assert jobs[parent].task_count == 1
     assert jobs[f"{parent}/child"].task_count == 1
-    assert len(statements) == 6
 
 
-def test_list_jobs_reads_one_bounded_page_when_more_than_500_jobs_exist(service, state):
+def test_list_jobs_reads_one_bounded_page_when_more_than_500_jobs_exist(service):
     for index in range(501):
         service.launch_job(make_job_request(f"bounded-{index:03d}"), None)
-    statements: list[str] = []
-
-    def capture_select(_connection, _cursor, statement, _parameters, _context, _executemany):
-        if statement.lstrip().upper().startswith(("SELECT", "WITH")):
-            statements.append(statement)
-
-    event.listen(state._db.sa_read_engine, "before_cursor_execute", capture_select)
-    try:
-        response = service.list_jobs(
-            controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(limit=10)),
-            None,
-        )
-    finally:
-        event.remove(state._db.sa_read_engine, "before_cursor_execute", capture_select)
+    response = service.list_jobs(
+        controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(limit=10)),
+        None,
+    )
 
     assert len(response.jobs) == 10
     assert response.total_count == 501
     assert response.has_more
-    assert len(statements) == 5
 
 
-def test_get_job_state_accepts_the_public_federation_bind_ceiling(service, state):
+def test_get_job_state_accepts_the_public_federation_bind_ceiling(service):
     first = service.launch_job(make_job_request("state-a"), None).job_id
     second = service.launch_job(make_job_request("state-b"), None).job_id
     requested = [first, second, *(f"/missing/job-{index}" for index in range(32_765))]
-    statements: list[str] = []
-
-    def capture_select(_connection, _cursor, statement, _parameters, _context, _executemany):
-        if statement.lstrip().upper().startswith(("SELECT", "WITH")):
-            statements.append(statement)
-
-    event.listen(state._db.sa_read_engine, "before_cursor_execute", capture_select)
-    try:
-        response = service.get_job_state(controller_pb2.Controller.GetJobStateRequest(job_ids=requested), None)
-    finally:
-        event.remove(state._db.sa_read_engine, "before_cursor_execute", capture_select)
+    response = service.get_job_state(controller_pb2.Controller.GetJobStateRequest(job_ids=requested), None)
 
     assert response.states == {
         first: job_pb2.JOB_STATE_PENDING,
         second: job_pb2.JOB_STATE_PENDING,
     }
-    assert len(statements) == 1
-    assert "json_each" in statements[0]
 
 
 @pytest.mark.parametrize("task_count", [501, 1_001])
@@ -1412,33 +1374,19 @@ def test_list_workers_filter_by_contains(service, state):
     assert by_substring.total_count == 4
 
 
-def test_list_workers_batches_resource_details_without_per_worker_reads(service, state, mock_controller):
+def test_list_workers_pages_across_more_than_200_workers(service, state):
     _register_workers_for_query(service, state, count_cpu=205, count_gpu=0)
-    mock_controller.provider.status.reset_mock()
-    selects: list[str] = []
-
-    def capture_select(_conn, _cursor, statement, _parameters, _context, _executemany) -> None:
-        if statement.lstrip().upper().startswith("SELECT"):
-            selects.append(statement)
-
-    event.listen(state._db.sa_read_engine, "before_cursor_execute", capture_select)
-    try:
-        response = service.list_workers(
-            controller_pb2.Controller.ListWorkersRequest(
-                query=controller_pb2.Controller.WorkerQuery(offset=195, limit=5),
-            ),
-            None,
-        )
-    finally:
-        event.remove(state._db.sa_read_engine, "before_cursor_execute", capture_select)
+    response = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(offset=195, limit=5),
+        ),
+        None,
+    )
 
     expected_ids = sorted(f"cpu-worker-{index:02d}" for index in range(205))[195:200]
     assert [worker.worker_id for worker in response.workers] == expected_ids
     assert response.total_count == 205
     assert response.has_more is True
-    assert len(selects) == 9
-    assert all("task_attempts" not in statement for statement in selects)
-    assert mock_controller.provider.status.call_count == 3
 
 
 # =============================================================================

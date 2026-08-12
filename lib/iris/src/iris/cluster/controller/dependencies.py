@@ -16,9 +16,6 @@ from iris.cluster.controller.auth import (
     ControllerAuth,
 )
 from iris.cluster.controller.persistence.database import ControllerDB
-from iris.cluster.controller.persistence.projections.endpoints import (
-    EndpointRow,
-)
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
 from iris.resources.errors import BackendIdentityUnknown
@@ -54,8 +51,6 @@ class EndpointRegistry(Protocol):
     """Native endpoint registry capabilities consumed by resource operations."""
 
     def system_endpoints(self) -> tuple[tuple[str, str], ...]: ...
-
-    def resolve_task_endpoint(self, name: str) -> EndpointRow | None: ...
 
 
 @dataclass(frozen=True, slots=True)

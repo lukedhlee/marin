@@ -370,19 +370,6 @@ def test_proxy_registry_reads_timeout_metadata(state, metadata_value, expected):
     assert mapping.timeout_seconds == expected
 
 
-def test_resolve_task_endpoint_returns_owner_row(state):
-    task, attempt = _live_task(state)
-    svc = _service(state)
-    svc.register_endpoint(_register_with_access("/serve/foo", task, attempt, 0), None)
-
-    row = svc.registry.resolve_task_endpoint("/serve/foo")
-    assert row is not None and row.task_id == task
-    assert svc.registry.resolve_task_endpoint("serve.foo") is not None  # dotted form too
-    # /system/ endpoints have no owning task and are not returned.
-    svc.registry.register_system_endpoint("/system/log-server", "logs:9000")
-    assert svc.registry.resolve_task_endpoint("/system/log-server") is None
-
-
 # --- MintEndpointToken RPC -----------------------------------------------------
 
 

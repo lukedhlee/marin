@@ -8,14 +8,13 @@ from dataclasses import dataclass
 from rigging.provenance import Provenance
 from rigging.timing import Duration
 
-from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
+from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
 from iris.resources.endpoint import ExecResult, ProfileConfiguration
 from iris.resources.job import ContainerProfile, CoschedulingConfig, PriorityBand
 from iris.resources.names import (
     AttemptUid,
     JobName,
 )
-from iris.resources.state import TaskState
 from iris.resources.system import ProcessInfo
 from iris.resources.worker import (
     AttemptStatus,
@@ -44,7 +43,7 @@ from iris.rpc.legacy.job_codec import (
     runtime_entrypoint_to_proto,
 )
 from iris.rpc.profile_codec import profile_configuration_from_proto
-from iris.time_proto import duration_to_proto, timestamp_from_proto, timestamp_to_proto
+from iris.time_proto import duration_to_proto, timestamp_to_proto
 
 
 @dataclass(frozen=True)
@@ -131,16 +130,6 @@ def resource_usage_to_proto(value: ResourceUsage) -> job_pb2.ResourceUsage:
     )
 
 
-def resource_usage_from_proto(value: job_pb2.ResourceUsage) -> ResourceUsage:
-    return ResourceUsage(
-        memory_mb=value.memory_mb,
-        disk_mb=value.disk_mb,
-        cpu_millicores=value.cpu_millicores,
-        memory_peak_mb=value.memory_peak_mb,
-        process_count=value.process_count,
-    )
-
-
 def worker_resource_snapshot_to_proto(value: WorkerResourceSnapshot) -> job_pb2.WorkerResourceSnapshot:
     result = job_pb2.WorkerResourceSnapshot(
         host_cpu_percent=value.host_cpu_percent,
@@ -156,21 +145,6 @@ def worker_resource_snapshot_to_proto(value: WorkerResourceSnapshot) -> job_pb2.
     if value.timestamp is not None:
         result.timestamp.CopyFrom(timestamp_to_proto(value.timestamp))
     return result
-
-
-def worker_resource_snapshot_from_proto(value: job_pb2.WorkerResourceSnapshot) -> WorkerResourceSnapshot:
-    return WorkerResourceSnapshot(
-        timestamp=timestamp_from_proto(value.timestamp) if value.HasField("timestamp") else None,
-        host_cpu_percent=value.host_cpu_percent,
-        memory_used_bytes=value.memory_used_bytes,
-        memory_total_bytes=value.memory_total_bytes,
-        disk_used_bytes=value.disk_used_bytes,
-        disk_total_bytes=value.disk_total_bytes,
-        running_task_count=value.running_task_count,
-        total_process_count=value.total_process_count,
-        net_recv_bytes=value.net_recv_bytes,
-        net_sent_bytes=value.net_sent_bytes,
-    )
 
 
 def attempt_launch_from_proto(value: job_pb2.RunTaskRequest) -> AttemptLaunch:
@@ -333,17 +307,6 @@ def _attempt_status_to_proto(value: AttemptStatus) -> worker_pb2.Worker.AttemptO
     if value.resource_usage is not None:
         result.resource_usage.CopyFrom(resource_usage_to_proto(value.resource_usage))
     return result
-
-
-def attempt_observation_from_proto(value: worker_pb2.Worker.AttemptObservation) -> AttemptObservation:
-    """Decode the reconciliation fields consumed by execution backends."""
-    return AttemptObservation(
-        attempt_uid=AttemptUid(value.attempt_uid),
-        state=TaskState(value.state),
-        exit_code=value.exit_code,
-        error=value.error or None,
-        container_id=value.container_id or None,
-    )
 
 
 def reconcile_response_to_proto(value: WorkerReconcileResponse) -> worker_pb2.Worker.ReconcileResponse:

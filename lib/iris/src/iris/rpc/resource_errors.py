@@ -24,7 +24,6 @@ from iris.resources.errors import (
     ResourcePreconditionFailed,
     ResourceReplaced,
     ResourceSourceUnavailable,
-    UnsupportedResourceVerb,
 )
 
 _T = TypeVar("_T")
@@ -48,7 +47,5 @@ def resource_call(operation: Callable[[], _T]) -> _T:
         raise ConnectError(Code.RESOURCE_EXHAUSTED, str(error)) from error
     except ResourceSourceUnavailable as error:
         raise ConnectError(Code.UNAVAILABLE, str(error)) from error
-    except UnsupportedResourceVerb as error:
-        raise ConnectError(Code.UNIMPLEMENTED, str(error)) from error
     except ResourceError as error:
         raise ConnectError(Code.INTERNAL, str(error)) from error

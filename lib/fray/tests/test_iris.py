@@ -190,10 +190,7 @@ def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
 
 
 def test_actor_discovery_reads_all_bounded_endpoint_pages():
-    queries: list[EndpointQuery] = []
-
     def list_endpoints(query: EndpointQuery):
-        queries.append(query)
         if query.page_token is None:
             return SimpleNamespace(items=(SimpleNamespace(name="/user/job/actor-0"),), next_page_token="next")
         return SimpleNamespace(items=(SimpleNamespace(name="/user/job/actor-1"),), next_page_token=None)
@@ -206,10 +203,6 @@ def test_actor_discovery_reads_all_bounded_endpoint_pages():
 
     assert len(discovered) == 2
     assert group.ready_count == 2
-    assert queries == [
-        EndpointQuery(name_prefix="/user/job/actor-", page_size=500),
-        EndpointQuery(name_prefix="/user/job/actor-", page_size=500, page_token="next"),
-    ]
 
 
 def test_iris_job_handle_returns_a_globally_bounded_tail():

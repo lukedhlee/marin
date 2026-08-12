@@ -165,15 +165,6 @@ class ServiceTestHarness:
         else:
             self._drive_gcp(task_id, new_state)
 
-    def drive_job_to_completion(
-        self,
-        job_id: JobName,
-        state: int = job_pb2.TASK_STATE_SUCCEEDED,
-    ) -> None:
-        """Drive all tasks in a job to the given terminal state."""
-        for task in self._query_tasks(job_id):
-            self.drive_task_state(task.task_id, state)
-
     def get_job_status(self, job_id: JobName) -> job_pb2.JobStatus:
         """Query job status via the RPC layer."""
         req = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())

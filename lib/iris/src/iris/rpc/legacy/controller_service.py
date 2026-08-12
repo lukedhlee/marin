@@ -441,40 +441,6 @@ def _federated_pending_reason(cluster: str, posture: FederationPosture, peer_sta
     return f"Pending on peer {cluster}"
 
 
-def _filter_and_sort_workers(
-    workers: list[tuple[Any, dict]],
-    liveness_by_id: dict[WorkerId, WorkerLiveness],
-    query: controller_pb2.Controller.WorkerQuery,
-) -> list[tuple[Any, dict]]:
-    """Apply the ``WorkerQuery`` contains filter and sort the cached roster.
-
-    Filtering and sorting happen in Python against the cached worker roster
-    rather than in SQL: the roster is bounded by cluster size (low thousands)
-    and already cached on the controller, so the marginal cost of a re-scan
-    per request is much smaller than reissuing the SELECT + worker_attributes
-    fan-out.
-    """
-    needle = query.contains.lower() if query.contains else ""
-    if needle:
-        workers = [
-            (w, attrs)
-            for w, attrs in workers
-            if needle in str(w.worker_id).lower() or (w.address and needle in w.address.lower())
-        ]
-
-    sort_field = query.sort_field or controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID
-    descending = query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
-    if sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT:
-        workers = sorted(workers, key=lambda wa: liveness_by_id[wa[0].worker_id].last_heartbeat_ms, reverse=descending)
-    elif sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE:
-        # CPU workers persist with ``device_type == ""``; under ascending sort
-        # they group first (treating CPU as the no-accelerator baseline).
-        workers = sorted(workers, key=lambda wa: (wa[0].device_type, str(wa[0].worker_id)), reverse=descending)
-    else:
-        workers = sorted(workers, key=lambda wa: str(wa[0].worker_id), reverse=descending)
-    return workers
-
-
 def _resolve_state_filter(state_filter: str) -> tuple[int, ...] | None:
     """Resolve a ``JobQuery.state_filter`` string into concrete state ids.
 

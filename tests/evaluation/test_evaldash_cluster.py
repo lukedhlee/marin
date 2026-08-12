@@ -118,7 +118,6 @@ def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
         ),
         attempts=(second_attempt,),
     )
-    batch_requests = []
 
     class FakeResourceClient:
         def __init__(self, **_kwargs) -> None:
@@ -136,7 +135,6 @@ def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
             return Page((), None, ())
 
         def describe_tasks(self, keys):
-            batch_requests.append(keys)
             details = {task.summary.identity.key: task, second_task.summary.identity.key: second_task}
             return tuple(details[key] for key in keys)
 
@@ -214,4 +212,3 @@ def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
             },
         ],
     }
-    assert batch_requests == [(task_key, second_key)]

@@ -49,18 +49,6 @@ def device_from_proto(value: job_pb2.DeviceConfig) -> Device | None:
             raise ValueError("device has no selected kind")
 
 
-def gpu_count_from_proto(value: job_pb2.DeviceConfig) -> int:
-    """Return the GPU count from a legacy worker device message."""
-    if not value.HasField("gpu"):
-        return 0
-    return value.gpu.count or 1
-
-
-def tpu_count_from_proto(value: job_pb2.DeviceConfig) -> int:
-    """Return the TPU count from a legacy worker device message."""
-    return value.tpu.count if value.HasField("tpu") else 0
-
-
 def resource_spec_to_proto(value: ResourceSpec) -> job_pb2.ResourceSpecProto:
     result = job_pb2.ResourceSpecProto()
     if value.cpu_millicores:

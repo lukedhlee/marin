@@ -43,12 +43,6 @@ class EndpointAttemptStale(ValueError):
     """The endpoint registration names a superseded Attempt."""
 
 
-def proxy_name_to_endpoint_names(proxy_name: str) -> tuple[str, str]:
-    """Decode a proxy ``.``-encoded name into endpoint-name candidates."""
-    slashed = proxy_name.replace(".", "/")
-    return f"/{slashed}", slashed
-
-
 def parse_proxy_timeout(metadata: dict[str, str]) -> float | None:
     """Read a positive per-endpoint proxy timeout, if configured."""
     raw = metadata.get(PROXY_TIMEOUT_METADATA_KEY)
@@ -225,13 +219,6 @@ class EndpointRegistry:
             return row.address
         with self._proxy_lock:
             return self._system_endpoints.get(name)
-
-    def resolve_task_endpoint(self, name: str) -> EndpointRow | None:
-        for candidate in proxy_name_to_endpoint_names(name):
-            row = self._db.caches[EndpointsProjection].resolve(candidate)
-            if row is not None:
-                return row
-        return None
 
     def task_endpoint(self, endpoint_id: str) -> EndpointRow | None:
         """Return the live task Endpoint with this exact registration ID."""

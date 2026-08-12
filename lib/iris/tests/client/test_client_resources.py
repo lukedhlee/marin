@@ -34,17 +34,21 @@ def _job(job_id: str, uid: str) -> JobSummary:
 
 def test_current_job_uses_an_exact_resource_query() -> None:
     exact = _job("/alice/train", "exact-uid")
+    sibling = _job("/alice/train-longer", "sibling-uid")
     cluster = MagicMock()
-    cluster.list_jobs.return_value = Page((exact,), None, ())
+    cluster.list_jobs.side_effect = lambda query: Page(
+        (exact,) if query == JobQuery(resource_id="/alice/train", page_size=1) else (sibling,),
+        None,
+        (),
+    )
     client = IrisClient(cluster)
 
     job = client.current_job(JobName.from_wire("/alice/train"))
 
     assert job.identity == exact.identity
-    assert cluster.list_jobs.call_args.args == (JobQuery(resource_id="/alice/train", page_size=1),)
 
 
-def test_job_state_and_wait_use_state_only_reads_until_terminal(monkeypatch) -> None:
+def test_job_wait_returns_the_terminal_summary(monkeypatch) -> None:
     running = _job("/alice/train", "exact-uid")
     succeeded = replace(running, state=JobState.SUCCEEDED)
     cluster = MagicMock()
@@ -57,8 +61,6 @@ def test_job_state_and_wait_use_state_only_reads_until_terminal(monkeypatch) -> 
     status = job.wait(timeout=1, poll_interval=0)
 
     assert status == succeeded
-    assert cluster.job_state.call_args_list[0].args == (running.identity,)
-    assert cluster.describe_job.call_args_list[0].args == (running.identity.key,)
 
 
 def test_current_task_resolves_a_task_handle_from_its_wire_id() -> None:
@@ -94,11 +96,14 @@ def test_current_task_resolves_a_task_handle_from_its_wire_id() -> None:
 
 
 def test_high_level_submit_applies_accelerator_cpu_floor_without_changing_direct_specs() -> None:
-    cluster = MagicMock()
-    cluster.submit_job.return_value = JobIdentity(
-        ResourceKey("test", ResourceKind.JOB, "/alice/train"),
-        "job-uid",
-    )
+    submitted = []
+
+    class Cluster:
+        def submit_job(self, spec, *, bundle=None):
+            submitted.append(spec)
+            return JobIdentity(ResourceKey("test", ResourceKind.JOB, spec.name), "job-uid")
+
+    cluster = Cluster()
     client = IrisClient(cluster)
     requested = ResourceSpec(cpu=0.5, device=GpuDevice("H100"))
 
@@ -110,8 +115,7 @@ def test_high_level_submit_applies_accelerator_cpu_floor_without_changing_direct
         user="alice",
     )
 
-    submitted = cluster.submit_job.call_args.args[0]
-    assert submitted.resources.cpu == 4
+    assert submitted[-1].resources.cpu == 4
     assert requested.cpu == 0.5
 
     client.submit(
@@ -121,8 +125,8 @@ def test_high_level_submit_applies_accelerator_cpu_floor_without_changing_direct
         environment=EnvironmentSpec(setup_scripts=()),
         user="alice",
     )
-    assert cluster.submit_job.call_args.args[0].resources.cpu == 6
+    assert submitted[-1].resources.cpu == 6
 
-    direct = replace(submitted, resources=requested)
+    direct = replace(submitted[0], resources=requested)
     client.submit_job(direct)
-    assert cluster.submit_job.call_args.args[0].resources.cpu == 0.5
+    assert submitted[-1].resources.cpu == 0.5

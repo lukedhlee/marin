@@ -15,7 +15,6 @@ from iris.cluster.federation.protocol import PeerCallError
 from iris.resources.errors import (
     ActionIdempotencyConflict,
     ActionPolicyRejected,
-    AmbiguousResourceMigration,
     BackendIdentityUnknown,
     InvalidPageToken,
     InvalidResourceKey,
@@ -28,8 +27,6 @@ from iris.resources.errors import (
     ResourcePreconditionFailed,
     ResourceReplaced,
     ResourceSourceUnavailable,
-    UnsupportedResourceSchema,
-    UnsupportedResourceVerb,
 )
 from iris.rpc import resource_pb2
 from iris.rpc.federation_client import peer_connect_error
@@ -194,8 +191,6 @@ def _resource_connect_error(error: ResourceError) -> ConnectError:
             ResourcePreconditionFailed,
             ActionPolicyRejected,
             BackendIdentityUnknown,
-            UnsupportedResourceSchema,
-            AmbiguousResourceMigration,
         ),
     ):
         code = Code.FAILED_PRECONDITION
@@ -205,8 +200,6 @@ def _resource_connect_error(error: ResourceError) -> ConnectError:
         code = Code.RESOURCE_EXHAUSTED
     elif isinstance(error, ResourceSourceUnavailable):
         code = Code.UNAVAILABLE
-    elif isinstance(error, UnsupportedResourceVerb):
-        code = Code.UNIMPLEMENTED
     else:
         code = Code.INTERNAL
     return ConnectError(code, str(error))

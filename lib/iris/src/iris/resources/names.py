@@ -118,12 +118,6 @@ class JobName:
         cluster = urllib.parse.quote(cluster_id, safe="")
         return f"{base_url.rstrip('/')}/#/job/{cluster}/{encoded}"
 
-    def task_dashboard_url(self, base_url: str, cluster_id: str) -> str:
-        self.require_task()
-        encoded = urllib.parse.quote(self.to_wire(), safe="")
-        cluster = urllib.parse.quote(cluster_id, safe="")
-        return f"{base_url.rstrip('/')}/#/task/{cluster}/{encoded}"
-
     @classmethod
     def from_wire(cls, value: str) -> "JobName":
         return cls.from_string(value)
@@ -189,12 +183,6 @@ class TaskAttempt:
     def task_index(self) -> int:
         return self.task_id.require_task()[1]
 
-    def with_attempt(self, attempt_id: int) -> "TaskAttempt":
-        return TaskAttempt(task_id=self.task_id, attempt_id=attempt_id)
-
-    def without_attempt(self) -> "TaskAttempt":
-        return TaskAttempt(task_id=self.task_id)
-
     def __str__(self) -> str:
         return self.to_wire()
 
@@ -203,7 +191,6 @@ class TaskAttempt:
 
 
 WorkerId = NewType("WorkerId", str)
-EndpointId = NewType("EndpointId", str)
 AttemptUid = NewType("AttemptUid", str)
 
 
