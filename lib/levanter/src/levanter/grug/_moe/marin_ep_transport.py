@@ -47,11 +47,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import lax
-from jax.experimental import pallas as pl
-from jax.experimental.pallas import mosaic_gpu as plgpu
 from jaxtyping import Array, Float, Int
-
-_OUT_KWARG = "out_type" if "out_type" in inspect.signature(plgpu.kernel).parameters else "out_shape"
 
 LANE = 256  # async-copy limit per dimension
 # Per-copy SMEM staging budget; the GB200 carveout is ~228 KB/SM, and the
@@ -166,6 +162,13 @@ def put_segments(
     condition: every peer signals once per SM after finishing all segments
     destined to me.
     """
+    # Local import guards the optional Mosaic-GPU machinery: this module is
+    # imported through `grug_moe` on every backend, and TPU/CPU installs
+    # must not load (or be perturbed by) the GPU pallas stack they never run.
+    from jax.experimental import pallas as pl  # noqa: PLC0415
+    from jax.experimental.pallas import mosaic_gpu as plgpu  # noqa: PLC0415
+
+    out_kwarg = "out_type" if "out_type" in inspect.signature(plgpu.kernel).parameters else "out_shape"
     hidden = src.shape[1]
     if hidden % LANE:
         raise ValueError(f"hidden={hidden} must be divisible by {LANE}")
@@ -255,7 +258,7 @@ def put_segments(
         grid_names=("sm",),
         num_threads=1,
         thread_name="wg",
-        **{_OUT_KWARG: out_types},
+        **{out_kwarg: out_types},
     )(src_view, plan.dest_ids, plan.src_lo, plan.dst_lo, plan.rows)
     return out.reshape(out_rows, hidden)
 
