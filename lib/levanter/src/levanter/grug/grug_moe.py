@@ -45,7 +45,6 @@ from levanter.grug._moe.ep_common import (
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
-from levanter.grug._moe.ep_marin import _moe_mlp_ep_marin_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
@@ -235,6 +234,11 @@ def moe_mlp(
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
         elif resolved_implementation == "marin_ep":
+            # Local import: the marin_ep backend carries Mosaic-GPU transport
+            # machinery that TPU/CPU deployments must not load at import time
+            # (its presence in the import graph shifts TPU fixed-a2a numerics).
+            from levanter.grug._moe.ep_marin import _moe_mlp_ep_marin_local  # noqa: PLC0415
+
             shard_local_fn = _moe_mlp_ep_marin_local
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
