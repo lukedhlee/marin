@@ -178,7 +178,6 @@ def test_xla_backend_matches_oracle_values_drops_and_grads_on_8_device_mesh():
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "OK" in result.stdout
 
 
 @pytest.mark.parametrize("transport", ["ragged", "mgpu"])

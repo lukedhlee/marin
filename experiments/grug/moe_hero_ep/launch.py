@@ -64,7 +64,10 @@ FLAVORS: dict[str, str] = {
     # Marin EP: group-pooled waterfilling drop rule (deterministic, EP-degree
     # invariant, ~10x fewer drops than the per-cell rule at the same capacity
     # factor). Multi-controller runs use ragged_all_to_all transport; the fused
-    # Mosaic-GPU transport engages automatically in single-process runs.
+    # Mosaic-GPU transport engages automatically in single-process runs. At 64
+    # ranks every ragged-class flavor (this one and `ep-ragged` alike) needs a
+    # PJRT with the MultiGpuBarrier kMaxPeers fix (#8313, openxla/xla#47283);
+    # smaller topologies are unaffected.
     "ep-marin": "marin_ep",
 }
 

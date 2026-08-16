@@ -39,6 +39,7 @@ from levanter.grug._moe.ep_common import (
     _sort_activations,
     _unpermute_from_global_expert,
 )
+from levanter.grug._moe.marin_ep_transport import LANE as _MGPU_LANE
 from levanter.grug._moe.marin_ep_transport import combine_segments, dispatch_segments, put_with_transpose
 from levanter.grug.sharding import _batch_axes
 
@@ -270,10 +271,14 @@ def _moe_mlp_ep_marin_local(
     The fused Mosaic-GPU transport needs symmetric memory across the expert
     axis, which current jax provides only within a single process (upstream
     removed the multi-process NVSHMEM path from Mosaic custom calls in
-    2026-07; the enable flag is `reserved` in xla.proto). Multi-controller
-    runs fall back to `ragged_all_to_all` — same semantics, same drop rule.
+    2026-07; the enable flag is `reserved` in xla.proto). It also assumes a
+    GPU backend and a hidden width divisible by its 256-lane async-copy
+    tile. Every other configuration — multi-controller, TPU/CPU, or an
+    unaligned hidden width — falls back to `ragged_all_to_all`: same
+    semantics, same drop rule.
     """
-    transport = "mgpu" if jax.process_count() == 1 else "ragged"
+    mgpu_ok = jax.process_count() == 1 and jax.default_backend() == "gpu" and x_local.shape[1] % _MGPU_LANE == 0
+    transport = "mgpu" if mgpu_ok else "ragged"
     return marin_ep_moe_local(
         x_local,
         selected_experts_local,
