@@ -99,11 +99,13 @@ documented maximum: 1,000 keys for S3 `DeleteObjects`, 100 sub-requests for the 
 batch endpoint. `--workers` sets the requests in flight, defaulting to 16 and accepting
 up to 256. Failed S3 batches are retried with backoff on transient errors.
 
-Raising `--workers` past the default helps only until the bucket throttles. A GCS bucket
-admits roughly 1,000 writes per second before it returns 429, and deletes count as
-writes, so 60M objects need about 17 hours whatever the client does. At that scale an
-object lifecycle rule costs nothing and needs no listing. It is the better tool, and it
-is why throwaway data belongs under a `ttl=` prefix that a rule already covers.
+`--workers` is worth raising on S3, which serves a much higher write rate, and worth
+lowering to delete politely beside a running job. On GCS the default is already at the
+bucket's ceiling: it admits roughly 1,000 writes per second before it returns 429, and
+deletes count as writes. 60M objects therefore need about 17 hours whatever the client
+does. At that scale an object lifecycle rule costs nothing and needs no listing. It is
+the better tool, and it is why throwaway data belongs under a `ttl=` prefix that a rule
+already covers.
 
 `usage` uses the same parallel metadata-page scanner as `du`, defaults to 128 workers,
 accepts up to 1,024 workers, and writes a Markdown report. Starting at the bucket root,
