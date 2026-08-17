@@ -267,19 +267,33 @@ def metadata_listing_pages(url: str, *, workers: int = DEFAULT_LISTING_WORKERS) 
 
 def _listing_filesystem(url: str, workers: int) -> tuple[Any, str]:
     fs, path = filesystem_for(url)
-    if _is_s3_filesystem(fs):
+    if is_s3_filesystem(fs):
         fs.config_kwargs = {**fs.config_kwargs, "max_pool_connections": workers}
     return fs, path
 
 
-def _is_s3_filesystem(fs) -> bool:
+def is_s3_filesystem(fs) -> bool:
+    """Whether *fs* speaks S3, through any wrapper that forwards its protocol.
+
+    Backend dispatch tests the protocol rather than the class: ``filesystem_for`` may
+    return a guard that proxies the real filesystem without subclassing it, so an
+    ``isinstance`` check silently misses and drops the caller onto a slow generic path.
+    """
+    return "s3" in _protocols(fs)
+
+
+def is_gcs_filesystem(fs) -> bool:
+    """Whether *fs* speaks GCS, through any wrapper that forwards its protocol."""
+    return "gcs" in _protocols(fs) or "gs" in _protocols(fs)
+
+
+def _protocols(fs) -> tuple[str, ...]:
     protocol = getattr(fs, "protocol", ())
-    protocols = (protocol,) if isinstance(protocol, str) else protocol
-    return "s3" in protocols
+    return (protocol,) if isinstance(protocol, str) else tuple(protocol)
 
 
 def _metadata_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
-    if _is_s3_filesystem(fs):
+    if is_s3_filesystem(fs):
         yield from _s3_listing_pages(fs, path, workers)
         return
 
