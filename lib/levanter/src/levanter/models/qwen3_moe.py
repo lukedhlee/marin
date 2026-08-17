@@ -78,6 +78,15 @@ class Qwen3MoeConfig(LlamaConfig):
     # off; the exported/served forward is untouched. See levanter.models.moe.dense_router_delta.
     dense_router_gradient: bool = False
 
+    # Route expert GEMMs through haliax's grouped-matmul path (shard_map + per-backend ragged_dot
+    # kernels with an explicit VJP) instead of a global-view jax.lax.ragged_dot_general. On GPU the
+    # XLA SPMD backward of ragged_dot_general densifies to [token, experts, dim]-shaped buffers —
+    # TiB-scale at 32k seq — which no rematerialization can recover. Default True: the gmm path is
+    # correct on both backends ("auto" picks megablox on TPU, pallas-triton on GPU).
+    # NB: this field must keep a usable default — use_hf_model_config replaces the yaml model
+    # config wholesale, so yaml-provided values do not survive HF checkpoint loading.
+    use_gmm: bool = True
+
     sliding_window: int | None = None
     max_window_layers: int = 48
     use_sliding_window: bool = False
@@ -250,11 +259,12 @@ class Qwen3MoeExperts(ModuleWithStateDictSerialization):
         *,
         key,
         use_bias: bool = False,
+        use_gmm: bool = True,
     ) -> "Qwen3MoeExperts":
         k_gate, k_up, k_down = jrandom.split(key, 3)
-        gate_proj = hnn.MoELinear.init(Experts=Experts, Out=Mlp, In=Embed, key=k_gate, use_bias=use_bias)
-        up_proj = hnn.MoELinear.init(Experts=Experts, Out=Mlp, In=Embed, key=k_up, use_bias=use_bias)
-        down_proj = hnn.MoELinear.init(Experts=Experts, Out=Embed, In=Mlp, key=k_down, use_bias=use_bias)
+        gate_proj = hnn.MoELinear.init(Experts=Experts, Out=Mlp, In=Embed, key=k_gate, use_bias=use_bias, use_gmm=use_gmm)
+        up_proj = hnn.MoELinear.init(Experts=Experts, Out=Mlp, In=Embed, key=k_up, use_bias=use_bias, use_gmm=use_gmm)
+        down_proj = hnn.MoELinear.init(Experts=Experts, Out=Embed, In=Mlp, key=k_down, use_bias=use_bias, use_gmm=use_gmm)
         return Qwen3MoeExperts(gate_proj, up_proj, down_proj, activation_fn)
 
     @named_call
@@ -312,6 +322,7 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
             activation_fn=config.activation_function.to_fn(),
             key=k_experts,
             use_bias=False,
+            use_gmm=config.use_gmm,
         )
         return Qwen3MoeSparseMoeBlock(config, gate, experts)
 
