@@ -457,9 +457,9 @@ def _gcs_listing_page(fs, path: str, page_token: str | None, delimiter: str) -> 
     a wide prefix entirely in memory. Driving ``pageToken`` here yields each page instead.
     ``_call`` carries gcsfs's own retry, so the caller needs none.
 
-    This reaches into gcsfs internals, which carry no compatibility promise. The checks
-    below turn a gcsfs rename into a named failure rather than a wrong listing, because
-    every command that lists GCS reaches this function.
+    This reaches into gcsfs internals, which carry no compatibility promise. Every
+    command that lists GCS reaches this function, so the checks below fail by name when
+    gcsfs moves the API. Without them a rename returns a listing that is silently wrong.
     """
     for attribute in ("_call", "_process_object", "loop"):
         if not hasattr(fs, attribute):

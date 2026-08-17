@@ -5,8 +5,8 @@
 
 Deletion is driven by :func:`rigging.fsutil.listing.metadata_listing_pages`, which lists
 prefixes in parallel and yields each page as it lands. Objects are removed as the listing
-discovers them, so the first delete leaves before a large prefix finishes listing and
-memory stays bounded by the requests in flight rather than by the size of the namespace.
+discovers them, so the first delete leaves before a large prefix finishes listing, and the
+objects held in memory are those of the requests in flight.
 
 Each submitted batch is exactly one delete request, so ``workers`` means concurrent
 delete requests on every backend.
@@ -26,16 +26,15 @@ from rigging.filesystem.s3_errors import is_transient_s3_error, is_transient_s3_
 from rigging.fsutil.listing import DEFAULT_LISTING_WORKERS, DIRECTORY_TYPE, metadata_listing_pages
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
-# Deletes are network-bound, but a bucket enforces its own write ceiling: GCS admits
-# roughly a thousand writes per second before it throttles. Sixteen requests in flight
-# saturates that without spending the run inside backoff.
+# A GCS bucket admits roughly a thousand writes per second before it throttles, and a
+# delete counts as a write. Sixteen requests of a hundred objects reach that ceiling.
 DEFAULT_DELETE_WORKERS = 16
 MAX_DELETE_WORKERS = 256
 
 # Objects per request, at each backend's documented maximum: DeleteObjects accepts a
 # thousand keys, and the GCS batch endpoint accepts a hundred sub-requests.
-S3_DELETE_BATCH = 1000
-GCS_DELETE_BATCH = 100
+_S3_DELETE_BATCH = 1000
+_GCS_DELETE_BATCH = 100
 
 _DELETE_MAX_ATTEMPTS = 4
 _DELETE_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0)
@@ -95,7 +94,6 @@ class DeleteProgress:
 class DeleteResult:
     """Totals for one completed prefix removal."""
 
-    url: str
     objects_deleted: int
     bytes_deleted: int
     elapsed_seconds: float
@@ -171,7 +169,6 @@ def delete_prefix(
 
     fs.invalidate_cache()
     return DeleteResult(
-        url=url,
         objects_deleted=deleted.objects,
         bytes_deleted=deleted.size_bytes,
         elapsed_seconds=time.monotonic() - started,
@@ -221,9 +218,9 @@ def _resolve_listing_workers(fs: AbstractFileSystem, workers: int, requested: in
 def _delete_batch_size(fs: AbstractFileSystem) -> int:
     """Objects per delete request, so that one batch costs one request."""
     if is_s3_filesystem(fs):
-        return S3_DELETE_BATCH
+        return _S3_DELETE_BATCH
     if is_gcs_filesystem(fs):
-        return GCS_DELETE_BATCH
+        return _GCS_DELETE_BATCH
     return 1
 
 
@@ -234,7 +231,7 @@ def _delete_batch(fs: AbstractFileSystem, paths: list[str]) -> None:
     if is_gcs_filesystem(fs):
         # gcsfs splits the list into batch sub-requests of its own, so sending a whole
         # batch keeps the call to a single round trip.
-        cast(_BatchDeleteFilesystem, fs).rm(paths, batchsize=GCS_DELETE_BATCH)
+        cast(_BatchDeleteFilesystem, fs).rm(paths, batchsize=_GCS_DELETE_BATCH)
         return
     fs.rm(paths)
 

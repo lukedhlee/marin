@@ -3,7 +3,7 @@
 
 """Which backend an fsspec filesystem speaks.
 
-Backend dispatch tests the protocol rather than the class. ``filesystem_for`` returns
+Backend dispatch tests the protocol. ``filesystem_for`` returns
 :class:`~rigging.filesystem.cross_region.CrossRegionGuardedFS` for a GCS URL, and that
 guard proxies the real filesystem without subclassing it, so an ``isinstance`` check
 misses and silently drops the caller onto a generic path.
@@ -12,7 +12,7 @@ misses and silently drops the caller onto a generic path.
 from typing import Any
 
 
-def protocols(fs: Any) -> tuple[str, ...]:
+def _protocols(fs: Any) -> tuple[str, ...]:
     """The protocols *fs* declares, as a tuple whether it declares one or several."""
     protocol = getattr(fs, "protocol", ())
     return (protocol,) if isinstance(protocol, str) else tuple(protocol)
@@ -20,10 +20,10 @@ def protocols(fs: Any) -> tuple[str, ...]:
 
 def is_s3_filesystem(fs: Any) -> bool:
     """Whether *fs* speaks S3, through any wrapper that forwards its protocol."""
-    return "s3" in protocols(fs)
+    return "s3" in _protocols(fs)
 
 
 def is_gcs_filesystem(fs: Any) -> bool:
     """Whether *fs* speaks GCS, through any wrapper that forwards its protocol."""
-    declared = protocols(fs)
+    declared = _protocols(fs)
     return "gcs" in declared or "gs" in declared

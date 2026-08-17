@@ -11,6 +11,7 @@ import json
 import lzma
 import os
 import threading
+from collections import Counter
 from datetime import UTC, datetime
 
 import fsspec.asyn
@@ -418,15 +419,14 @@ class _ObjectStore:
     """One bucket of keys, listed with real prefix, delimiter, and page-token semantics.
 
     A listing collapses every key whose remainder holds the delimiter into a common
-    prefix, and pages over the key order. Fakes that skip this cannot show whether the
-    scanner reaches a key, which is what makes a dropped sub-prefix visible.
+    prefix, and pages over the key order. A fake that returns every matching key whatever
+    the delimiter cannot show that the scanner skipped a sub-prefix.
     """
 
-    def __init__(self, bucket, keys, page_size):
-        self.bucket = bucket
+    def __init__(self, keys, page_size):
         self.keys = sorted(keys)
         self.page_size = page_size
-        self.deleted = set()
+        self.deletes = Counter()
         self.pages_served = 0
 
     def page(self, prefix, delimiter, token):
@@ -449,11 +449,15 @@ class _ObjectStore:
         return objects, prefixes, (str(index) if index < len(matching) else None)
 
     def delete(self, keys):
-        self.deleted.update(keys)
+        self.deletes.update(keys)
 
     @property
     def surviving(self):
-        return set(self.keys) - self.deleted
+        return set(self.keys) - set(self.deletes)
+
+    @property
+    def deleted_twice(self):
+        return {key for key, count in self.deletes.items() if count > 1}
 
 
 class _FakeS3FileSystem:
@@ -538,7 +542,7 @@ def test_rm_removes_keys_holding_an_empty_path_segment(monkeypatch, backend):
     survives a removal that reports success.
     """
     keys = [f"prefix/a//deep{index}" for index in range(4)] + [f"prefix/a/plain{index}" for index in range(4)]
-    store = _ObjectStore("bucket", keys, page_size=3)
+    store = _ObjectStore(keys, page_size=3)
     fs = _FakeS3FileSystem(store) if backend == "s3" else _FakeGCSFileSystem(store)
     _install_filesystem(monkeypatch, fs)
 
@@ -550,8 +554,9 @@ def test_rm_removes_keys_holding_an_empty_path_segment(monkeypatch, backend):
 
 @pytest.mark.parametrize("backend", ["s3", "gs"])
 def test_rm_deletes_a_nested_tree_exactly_once(monkeypatch, backend):
+    """The scanner re-lists a prefix it probed, so a key can reach the delete pool twice."""
     keys = [f"prefix/{a}/{b}/leaf{index}" for a in "xy" for b in "mn" for index in range(3)]
-    store = _ObjectStore("bucket", keys, page_size=3)
+    store = _ObjectStore(keys, page_size=3)
     fs = _FakeS3FileSystem(store) if backend == "s3" else _FakeGCSFileSystem(store)
     _install_filesystem(monkeypatch, fs)
 
@@ -559,7 +564,7 @@ def test_rm_deletes_a_nested_tree_exactly_once(monkeypatch, backend):
 
     assert result.exit_code == 0, result.output
     assert store.surviving == set()
-    assert len(store.deleted) == len(keys)
+    assert store.deleted_twice == set()
 
 
 def test_rm_pages_a_flat_gcs_prefix(monkeypatch):
@@ -568,7 +573,7 @@ def test_rm_pages_a_flat_gcs_prefix(monkeypatch):
     gcsfs accumulates every page before it returns, which puts the whole prefix in memory
     and delays the first delete until the scan completes.
     """
-    store = _ObjectStore("bucket", [f"prefix/part{index:04d}" for index in range(450)], page_size=100)
+    store = _ObjectStore([f"prefix/part{index:04d}" for index in range(450)], page_size=100)
     _install_filesystem(monkeypatch, _FakeGCSFileSystem(store))
 
     pages = list(listing.metadata_listing_pages("gs://bucket/prefix", workers=4))
@@ -624,25 +629,14 @@ def test_rm_retries_a_throttled_bulk_delete(monkeypatch):
 
 
 def test_rm_does_not_retry_a_batch_holding_a_permanent_error(monkeypatch):
-    """A mixed batch must fail once, not re-send every key until the attempts run out.
+    """A batch holding one permanent code fails on its first attempt.
 
     `is_transient_s3_error` falls back to scanning the message text, so a permanent
-    failure whose report also quotes a throttling code reads as transient.
+    failure whose report also quotes a throttling code reads as transient. All 1000 keys
+    then go out four times before the command fails.
     """
     mixed = [{"Key": "prefix/0", "Code": "SlowDown"}, {"Key": "prefix/1", "Code": "AccessDenied"}]
     fs = _BulkDeleteS3FileSystem([mixed])
-    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-
-    result = CliRunner().invoke(cli, ["rm", "-R", "s3://bucket/prefix"])
-
-    assert result.exit_code != 0
-    assert fs.attempts == 1
-
-
-def test_rm_fails_on_a_permanent_bulk_delete_error(monkeypatch):
-    fs = _BulkDeleteS3FileSystem([[{"Key": "prefix/0", "Code": "AccessDenied"}]])
     monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
     monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
     monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
@@ -677,7 +671,7 @@ def test_rm_batches_through_a_filesystem_wrapper(monkeypatch):
         def __getattr__(self, name):
             return getattr(self._fs, name)
 
-    store = _ObjectStore("bucket", [f"prefix/part{index:04d}" for index in range(250)], page_size=250)
+    store = _ObjectStore([f"prefix/part{index:04d}" for index in range(250)], page_size=250)
     inner = RecordingGCSFileSystem(store)
     _install_filesystem(monkeypatch, GuardWrapper(inner))
 

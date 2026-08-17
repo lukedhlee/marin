@@ -87,24 +87,23 @@ by default. `--hex` selects hexadecimal output.
 
 `du` scans prefixes with up to 128 concurrent metadata-bearing listings. A prefix that
 exceeds one listing page is split at the next `/` through three directory levels, then
-paginated flat. Both object stores drive their own paging call, so a prefix with
-millions of objects directly below it arrives one page at a time rather than in a single
-response.
+paginated flat. Both object stores drive their own paging call, so a prefix with millions
+of objects directly below it arrives one page at a time.
 
 Recursive `rm` on a remote prefix runs on that same parallel page scanner and deletes
-each page as it lands, rather than scanning the whole prefix first. Deletes start
-immediately, and the objects held in memory are bounded by the requests in flight
-instead of by the size of the prefix. One batch is one request, at each backend's
-documented maximum: 1,000 keys for S3 `DeleteObjects`, 100 sub-requests for the GCS
-batch endpoint. `--workers` sets the requests in flight, defaulting to 16 and accepting
-up to 256. Failed S3 batches are retried with backoff on transient errors.
+each page as it lands. The first delete leaves while the scan continues, and the objects
+held in memory are those of the requests in flight. One batch is one request, at each
+backend's documented maximum: 1,000 keys for S3 `DeleteObjects`, 100 sub-requests for the
+GCS batch endpoint. `--workers` sets the requests in flight, defaulting to 16 and
+accepting up to 256. A batch is retried with backoff when the transport fails, and when
+S3 answers 200 and reports every key throttled in the response body.
 
-`--workers` is worth raising on S3, which serves a much higher write rate, and worth
-lowering to delete politely beside a running job. On GCS the default is already at the
-bucket's ceiling: it admits roughly 1,000 writes per second before it returns 429, and
-deletes count as writes. 60M objects therefore need about 17 hours whatever the client
-does. At that scale an object lifecycle rule costs nothing and needs no listing. It is
-the better tool, and it is why throwaway data belongs under a `ttl=` prefix that a rule
+On GCS the default already reaches the bucket ceiling: GCS admits roughly 1,000 writes
+per second before it returns 429, and a delete counts as a write. 60M objects therefore
+need about 17 hours whatever the client does. Raising `--workers` past the default only
+helps on the S3-compatible backends, whose ceilings are not measured here. Lower it to
+delete beside a running job. At 60M objects an object lifecycle rule costs nothing and
+needs no listing, which is why throwaway data belongs under a `ttl=` prefix that a rule
 already covers.
 
 `usage` uses the same parallel metadata-page scanner as `du`, defaults to 128 workers,
