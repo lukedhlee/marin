@@ -19,11 +19,11 @@ from fsspec.implementations.local import LocalFileSystem
 
 from rigging.filesystem.cross_region import (
     CrossRegionGuardedFS,
-    _fs_is_gcs,
     _is_gcs_protocol,
     _is_gcs_url,
 )
 from rigging.filesystem.listing_cache import configure_listing_cache_defaults
+from rigging.filesystem.protocols import is_gcs_filesystem
 from rigging.filesystem.s3_compat import s3_python_config_kwargs
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     if url.startswith("s3://"):
         kwargs = _with_s3_timeout_defaults(kwargs)
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
-    if _fs_is_gcs(fs):
+    if is_gcs_filesystem(fs):
         fs = CrossRegionGuardedFS(fs)
     return fs, path
 

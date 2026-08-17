@@ -184,14 +184,6 @@ def _regions_match(vm_region: str, bucket_location: str) -> bool:
     return False
 
 
-def _fs_is_gcs(fs: Any) -> bool:
-    """Return True if *fs* is a GCS-backed fsspec filesystem."""
-    proto = getattr(fs, "protocol", None)
-    if isinstance(proto, tuple):
-        return "gs" in proto or "gcs" in proto
-    return proto in ("gs", "gcs")
-
-
 def _is_gcs_url(url: str) -> bool:
     """Return True if *url* starts with a GCS scheme."""
     return url.startswith("gs://") or url.startswith("gcs://")
