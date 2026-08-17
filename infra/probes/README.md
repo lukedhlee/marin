@@ -81,8 +81,9 @@ uv run deploy/deploy.py apply    # roll the VM to this HEAD's :sha image
 uv run deploy/deploy.py status   # VM state + recent logs
 ```
 
-Project, region, zone, VM name, and repo default to the prod values and can be
-overridden per-command (`--project`, `--zone`, …) or via `MARIN_PROBES_*` env vars.
+Project, region, zone, VM name, and repo default to the prod values. `build`,
+`apply`, and `status` accept overrides (`--project`, `--zone`, …) or the
+corresponding `MARIN_PROBES_*` environment variables.
 
 ### One-time VM creation
 
@@ -99,6 +100,11 @@ PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" pulumi -C infra/pulumi up --stack mari
 cd infra/probes
 uv run deploy/deploy.py create    # --iris-endpoint / --machine-type to override
 ```
+
+`create` accepts the declared `hai-gcp-models` project, `us-central1` region,
+and `marin` repository only. Change `iam_data.yaml` before targeting different
+resources so the VM cannot select a service account or repository without the
+corresponding grants.
 
 For an existing service account or IAM member, use the
 [Program-first import workflow](../pulumi/README.md#adopting-live-resources) before the normal

@@ -24,6 +24,9 @@ logger = logging.getLogger("deploy")
 
 IMAGE_NAME = "infra-probes"
 RESULTS_HOST_PATH = "/var/lib/probes"
+PROJECT = "hai-gcp-models"
+REGION = "us-central1"
+REPOSITORY = "marin"
 # Build context / git repo root for `build`: this script lives in deploy/.
 PROBES_DIR = Path(__file__).resolve().parent.parent
 
@@ -42,11 +45,11 @@ def _service_account(project: str) -> str:
 
 
 @click.group()
-@click.option("--project", envvar="MARIN_PROBES_PROJECT", default="hai-gcp-models", show_default=True)
-@click.option("--region", envvar="MARIN_PROBES_REGION", default="us-central1", show_default=True)
+@click.option("--project", envvar="MARIN_PROBES_PROJECT", default=PROJECT, show_default=True)
+@click.option("--region", envvar="MARIN_PROBES_REGION", default=REGION, show_default=True)
 @click.option("--zone", envvar="MARIN_PROBES_ZONE", default="us-central1-b", show_default=True)
 @click.option("--vm-name", envvar="MARIN_PROBES_VM", default="infra-probes", show_default=True)
-@click.option("--repo", envvar="MARIN_PROBES_REPO", default="marin", show_default=True)
+@click.option("--repo", envvar="MARIN_PROBES_REPO", default=REPOSITORY, show_default=True)
 @click.pass_context
 def cli(ctx: click.Context, project: str, region: str, zone: str, vm_name: str, repo: str) -> None:
     ctx.obj = {
@@ -54,6 +57,7 @@ def cli(ctx: click.Context, project: str, region: str, zone: str, vm_name: str, 
         "region": region,
         "zone": zone,
         "vm_name": vm_name,
+        "repo": repo,
         "registry": _artifact_registry(region, project, repo),
     }
 
@@ -63,6 +67,15 @@ def _git_sha() -> str:
         ["git", "-C", str(PROBES_DIR), "rev-parse", "--short", "HEAD"],
         capture_output=True,
     ).stdout.strip()
+
+
+def _validate_create_target(cfg: dict[str, str]) -> None:
+    if (cfg["project"], cfg["region"], cfg["repo"]) == (PROJECT, REGION, REPOSITORY):
+        return
+    raise click.ClickException(
+        "create requires --project=hai-gcp-models --region=us-central1 --repo=marin because "
+        "the marin Pulumi stack owns the infra-probes service account and IAM grants"
+    )
 
 
 @cli.command()
@@ -165,6 +178,7 @@ def create(cfg: dict[str, str], iris_endpoint: str, machine_type: str) -> None:
     The instance create fails if it already exists. The service account and its
     IAM access are declared by the marin Pulumi stack.
     """
+    _validate_create_target(cfg)
     project = cfg["project"]
     sa = _service_account(project)
 

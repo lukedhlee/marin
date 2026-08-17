@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TypeVar
 
 import yaml
 from yaml.nodes import MappingNode
@@ -50,7 +51,7 @@ _YAML_HEADER = """\
 # user principals are KMS ciphertexts declared once under `principals`; grants
 # reference their opaque IDs so one principal cannot drift across roles.
 # Machine principals with grants on several resources are grouped under
-# `service_access`; the loader lowers them to the resource-oriented model.
+# `service_access`; the program validates and materializes their grants.
 #
 # The owned service account and custom roles came from the retired
 # infra/permissions project. Do not add custom roles found live unless Pulumi
@@ -561,31 +562,59 @@ def _service_bucket_condition(service: GcpServiceAccess, access: GcpServiceBucke
     )
 
 
+_ResourceIam = TypeVar("_ResourceIam")
+
+
+def _resource_access(
+    resources: tuple[_ResourceIam, ...],
+    *,
+    matches: Callable[[_ResourceIam], bool],
+    resource_name: str,
+    role: str,
+    member: str,
+    condition: GcpIamCondition | None,
+    source: str,
+    grants_for: Callable[[_ResourceIam], tuple[GcpRoleGrant, ...]],
+    create: Callable[[tuple[GcpRoleGrant, ...]], _ResourceIam],
+    with_grants: Callable[[_ResourceIam, tuple[GcpRoleGrant, ...]], _ResourceIam],
+) -> tuple[_ResourceIam, ...]:
+    indexes = [index for index, resource in enumerate(resources) if matches(resource)]
+    if len(indexes) > 1:
+        raise ValueError(f"{resource_name} has multiple IAM declarations")
+    if not indexes:
+        grant = GcpRoleGrant(role=role, members=(member,), condition=condition)
+        return (*resources, create((grant,)))
+
+    index = indexes[0]
+    resource = resources[index]
+    grants = _grant_with_member(
+        grants_for(resource),
+        role=role,
+        member=member,
+        condition=condition,
+        source=source,
+    )
+    updated = with_grants(resource, grants)
+    return (*resources[:index], updated, *resources[index + 1 :])
+
+
 def _secret_access(
     secrets: tuple[GcpSecretIam, ...],
     service: GcpServiceAccess,
     access: GcpServiceSecretAccess,
 ) -> tuple[GcpSecretIam, ...]:
-    indexes = [index for index, secret in enumerate(secrets) if secret.secret == access.secret]
-    if len(indexes) > 1:
-        raise ValueError(f"secret {access.secret!r} has multiple IAM declarations")
-    grant_source = f"service_access.{service.name}.secrets.{access.secret}.{access.role}"
-    if not indexes:
-        grant = GcpRoleGrant(role=access.role, members=(service.member,))
-        return (*secrets, GcpSecretIam(secret=access.secret, grants=(grant,)))
-    index = indexes[0]
-    secret = secrets[index]
-    updated = replace(
-        secret,
-        grants=_grant_with_member(
-            secret.grants,
-            role=access.role,
-            member=service.member,
-            condition=None,
-            source=grant_source,
-        ),
+    return _resource_access(
+        secrets,
+        matches=lambda secret: secret.secret == access.secret,
+        resource_name=f"secret {access.secret!r}",
+        role=access.role,
+        member=service.member,
+        condition=None,
+        source=f"service_access.{service.name}.secrets.{access.secret}.{access.role}",
+        grants_for=lambda secret: secret.grants,
+        create=lambda grants: GcpSecretIam(secret=access.secret, grants=grants),
+        with_grants=lambda secret, grants: replace(secret, grants=grants),
     )
-    return (*secrets[:index], updated, *secrets[index + 1 :])
 
 
 def _bucket_access(
@@ -593,27 +622,19 @@ def _bucket_access(
     service: GcpServiceAccess,
     access: GcpServiceBucketAccess,
 ) -> tuple[GcpBucketIam, ...]:
-    indexes = [index for index, bucket in enumerate(buckets) if bucket.bucket == access.bucket]
-    if len(indexes) > 1:
-        raise ValueError(f"bucket {access.bucket!r} has multiple IAM declarations")
     condition = _service_bucket_condition(service, access)
-    grant_source = f"service_access.{service.name}.buckets.{access.bucket}.{access.role}"
-    if not indexes:
-        grant = GcpRoleGrant(role=access.role, members=(service.member,), condition=condition)
-        return (*buckets, GcpBucketIam(bucket=access.bucket, grants=(grant,)))
-    index = indexes[0]
-    bucket = buckets[index]
-    updated = replace(
-        bucket,
-        grants=_grant_with_member(
-            bucket.grants,
-            role=access.role,
-            member=service.member,
-            condition=condition,
-            source=grant_source,
-        ),
+    return _resource_access(
+        buckets,
+        matches=lambda bucket: bucket.bucket == access.bucket,
+        resource_name=f"bucket {access.bucket!r}",
+        role=access.role,
+        member=service.member,
+        condition=condition,
+        source=f"service_access.{service.name}.buckets.{access.bucket}.{access.role}",
+        grants_for=lambda bucket: bucket.grants,
+        create=lambda grants: GcpBucketIam(bucket=access.bucket, grants=grants),
+        with_grants=lambda bucket, grants: replace(bucket, grants=grants),
     )
-    return (*buckets[:index], updated, *buckets[index + 1 :])
 
 
 def _artifact_repository_access(
@@ -621,40 +642,27 @@ def _artifact_repository_access(
     service: GcpServiceAccess,
     access: GcpServiceArtifactRepositoryAccess,
 ) -> tuple[GcpArtifactRepositoryIam, ...]:
-    indexes = [
-        index
-        for index, repository in enumerate(repositories)
-        if (repository.location, repository.repository) == (access.location, access.repository)
-    ]
     repository_id = f"{access.location}/{access.repository}"
-    if len(indexes) > 1:
-        raise ValueError(f"artifact repository {repository_id} has multiple IAM declarations")
-    grant_source = f"service_access.{service.name}.artifact_repositories.{repository_id}.{access.role}"
-    if not indexes:
-        grant = GcpRoleGrant(role=access.role, members=(service.member,))
-        repository = GcpArtifactRepositoryIam(
+    return _resource_access(
+        repositories,
+        matches=lambda repository: (repository.location, repository.repository) == (access.location, access.repository),
+        resource_name=f"artifact repository {repository_id}",
+        role=access.role,
+        member=service.member,
+        condition=None,
+        source=f"service_access.{service.name}.artifact_repositories.{repository_id}.{access.role}",
+        grants_for=lambda repository: repository.grants,
+        create=lambda grants: GcpArtifactRepositoryIam(
             location=access.location,
             repository=access.repository,
-            grants=(grant,),
-        )
-        return (*repositories, repository)
-    index = indexes[0]
-    repository = repositories[index]
-    updated = replace(
-        repository,
-        grants=_grant_with_member(
-            repository.grants,
-            role=access.role,
-            member=service.member,
-            condition=None,
-            source=grant_source,
+            grants=grants,
         ),
+        with_grants=lambda repository, grants: replace(repository, grants=grants),
     )
-    return (*repositories[:index], updated, *repositories[index + 1 :])
 
 
 def effective_iam_config(config: GcpIamConfig) -> GcpIamConfig:
-    """Lower service-oriented access into the resource-oriented grants consumed by Pulumi."""
+    """Return a resource-oriented config, rejecting duplicate physical grants."""
     project_grants = config.project_grants
     secrets = config.secrets
     buckets = config.buckets
