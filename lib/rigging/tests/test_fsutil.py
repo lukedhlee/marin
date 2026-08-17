@@ -414,20 +414,54 @@ def test_rm_uses_s3_bulk_delete_batches(monkeypatch):
     assert {item["Key"] for batch in batches for item in batch} == {f"prefix/{index}" for index in range(1001)}
 
 
-class _FakeGCSFileSystem:
-    """A GCS stub that serves the JSON listing API one page at a time, as GCS does.
+class _ObjectStore:
+    """One bucket of keys, listed with real prefix, delimiter, and page-token semantics.
 
-    The flat prefix it serves has no sub-prefixes to split across threads, which is the
-    layout that forces the listing through paging rather than fan-out.
+    A listing collapses every key whose remainder holds the delimiter into a common
+    prefix, and pages over the key order. Fakes that skip this cannot show whether the
+    scanner reaches a key, which is what makes a dropped sub-prefix visible.
     """
 
-    protocol = ("gs", "gcs")
-    page_size = 100
-
-    def __init__(self, object_count):
-        self.object_count = object_count
-        self.loop = fsspec.asyn.get_loop()
+    def __init__(self, bucket, keys, page_size):
+        self.bucket = bucket
+        self.keys = sorted(keys)
+        self.page_size = page_size
+        self.deleted = set()
         self.pages_served = 0
+
+    def page(self, prefix, delimiter, token):
+        """Return ``(object keys, common prefixes, next token)`` for one page."""
+        self.pages_served += 1
+        matching = [key for key in self.keys if key.startswith(prefix)]
+        objects, prefixes, seen = [], [], set()
+        index = int(token or 0)
+        while index < len(matching) and len(objects) + len(prefixes) < self.page_size:
+            key = matching[index]
+            index += 1
+            remainder = key[len(prefix) :]
+            if delimiter and delimiter in remainder:
+                common = f"{prefix}{remainder.split(delimiter, 1)[0]}{delimiter}"
+                if common not in seen:
+                    seen.add(common)
+                    prefixes.append(common)
+                continue
+            objects.append(key)
+        return objects, prefixes, (str(index) if index < len(matching) else None)
+
+    def delete(self, keys):
+        self.deleted.update(keys)
+
+    @property
+    def surviving(self):
+        return set(self.keys) - self.deleted
+
+
+class _FakeS3FileSystem:
+    protocol = "s3"
+
+    def __init__(self, store):
+        self.store = store
+        self.config_kwargs = {}
 
     def isdir(self, _path):
         return True
@@ -436,23 +470,96 @@ class _FakeGCSFileSystem:
         bucket, key = path.split("/", 1)
         return bucket, key, None
 
-    async def _call(self, _method, _url, _bucket, *, pageToken=None, **_kwargs):
-        start = int(pageToken or 0)
-        end = min(start + self.page_size, self.object_count)
-        self.pages_served += 1
-        page = {"items": [{"index": index} for index in range(start, end)]}
-        if end < self.object_count:
-            page["nextPageToken"] = str(end)
-        return page
-
-    def _process_object(self, bucket, item):
-        return {"name": f"{bucket}/prefix/{item['index']}", "size": 1, "type": "file"}
-
-    def rm(self, paths, **_kwargs):
-        pass
+    def call_s3(self, method, **kwargs):
+        if method == "delete_objects":
+            self.store.delete(item["Key"] for item in kwargs["Delete"]["Objects"])
+            return {}
+        objects, prefixes, token = self.store.page(
+            kwargs["Prefix"], kwargs["Delimiter"], kwargs.get("ContinuationToken")
+        )
+        response = {
+            "Contents": [{"Key": key, "Size": 1} for key in objects],
+            "CommonPrefixes": [{"Prefix": prefix} for prefix in prefixes],
+        }
+        if token is not None:
+            response["NextContinuationToken"] = token
+        return response
 
     def invalidate_cache(self):
         pass
+
+
+class _FakeGCSFileSystem:
+    protocol = ("gs", "gcs")
+
+    def __init__(self, store):
+        self.store = store
+        self.loop = fsspec.asyn.get_loop()
+
+    def isdir(self, _path):
+        return True
+
+    def split_path(self, path):
+        bucket, key = path.split("/", 1)
+        return bucket, key, None
+
+    async def _call(self, _method, _template, _bucket, *, prefix, delimiter, pageToken=None, **_kwargs):
+        objects, prefixes, token = self.store.page(prefix, delimiter, pageToken)
+        page = {
+            "kind": "storage#objects",
+            "items": [{"key": key} for key in objects],
+            "prefixes": prefixes,
+        }
+        if token is not None:
+            page["nextPageToken"] = token
+        return page
+
+    def _process_object(self, bucket, item):
+        return {"name": f"{bucket}/{item['key']}", "size": 1, "type": "file"}
+
+    def rm(self, paths, **_kwargs):
+        self.store.delete(path.split("/", 1)[1] for path in paths)
+
+    def invalidate_cache(self):
+        pass
+
+
+def _install_filesystem(monkeypatch, fs):
+    for module in (deletion, listing, cli_module):
+        monkeypatch.setattr(module, "filesystem_for", lambda _url, fs=fs: (fs, "bucket/prefix"))
+
+
+@pytest.mark.parametrize("backend", ["s3", "gs"])
+def test_rm_removes_keys_holding_an_empty_path_segment(monkeypatch, backend):
+    """An object key may contain `//`, and dropping it loses data while `rm` exits 0.
+
+    Listing `bucket/prefix/a` reports the sub-prefix `bucket/prefix/a//`. When that reads
+    as the listed path itself, the scanner never descends into it, so every key below it
+    survives a removal that reports success.
+    """
+    keys = [f"prefix/a//deep{index}" for index in range(4)] + [f"prefix/a/plain{index}" for index in range(4)]
+    store = _ObjectStore("bucket", keys, page_size=3)
+    fs = _FakeS3FileSystem(store) if backend == "s3" else _FakeGCSFileSystem(store)
+    _install_filesystem(monkeypatch, fs)
+
+    result = CliRunner().invoke(cli, ["rm", "-R", f"{backend}://bucket/prefix"])
+
+    assert result.exit_code == 0, result.output
+    assert store.surviving == set()
+
+
+@pytest.mark.parametrize("backend", ["s3", "gs"])
+def test_rm_deletes_a_nested_tree_exactly_once(monkeypatch, backend):
+    keys = [f"prefix/{a}/{b}/leaf{index}" for a in "xy" for b in "mn" for index in range(3)]
+    store = _ObjectStore("bucket", keys, page_size=3)
+    fs = _FakeS3FileSystem(store) if backend == "s3" else _FakeGCSFileSystem(store)
+    _install_filesystem(monkeypatch, fs)
+
+    result = CliRunner().invoke(cli, ["rm", "-R", f"{backend}://bucket/prefix"])
+
+    assert result.exit_code == 0, result.output
+    assert store.surviving == set()
+    assert len(store.deleted) == len(keys)
 
 
 def test_rm_pages_a_flat_gcs_prefix(monkeypatch):
@@ -461,14 +568,12 @@ def test_rm_pages_a_flat_gcs_prefix(monkeypatch):
     gcsfs accumulates every page before it returns, which puts the whole prefix in memory
     and delays the first delete until the scan completes.
     """
-    fs = _FakeGCSFileSystem(object_count=450)
-    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    store = _ObjectStore("bucket", [f"prefix/part{index:04d}" for index in range(450)], page_size=100)
+    _install_filesystem(monkeypatch, _FakeGCSFileSystem(store))
 
     pages = list(listing.metadata_listing_pages("gs://bucket/prefix", workers=4))
 
-    assert fs.pages_served > 1, "a flat prefix must arrive over several pages"
+    assert store.pages_served > 1, "a flat prefix must arrive over several pages"
     assert sum(len(page.entries) for page in pages) == 450
 
 
@@ -518,6 +623,24 @@ def test_rm_retries_a_throttled_bulk_delete(monkeypatch):
     assert fs.attempts == 2
 
 
+def test_rm_does_not_retry_a_batch_holding_a_permanent_error(monkeypatch):
+    """A mixed batch must fail once, not re-send every key until the attempts run out.
+
+    `is_transient_s3_error` falls back to scanning the message text, so a permanent
+    failure whose report also quotes a throttling code reads as transient.
+    """
+    mixed = [{"Key": "prefix/0", "Code": "SlowDown"}, {"Key": "prefix/1", "Code": "AccessDenied"}]
+    fs = _BulkDeleteS3FileSystem([mixed])
+    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+
+    result = CliRunner().invoke(cli, ["rm", "-R", "s3://bucket/prefix"])
+
+    assert result.exit_code != 0
+    assert fs.attempts == 1
+
+
 def test_rm_fails_on_a_permanent_bulk_delete_error(monkeypatch):
     fs = _BulkDeleteS3FileSystem([[{"Key": "prefix/0", "Code": "AccessDenied"}]])
     monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
@@ -539,12 +662,13 @@ def test_rm_batches_through_a_filesystem_wrapper(monkeypatch):
     """
 
     class RecordingGCSFileSystem(_FakeGCSFileSystem):
-        def __init__(self):
-            super().__init__(object_count=250)
+        def __init__(self, store):
+            super().__init__(store)
             self.batch_sizes = []
 
-        def rm(self, paths, **_kwargs):
+        def rm(self, paths, **kwargs):
             self.batch_sizes.append(len(paths))
+            super().rm(paths, **kwargs)
 
     class GuardWrapper:
         def __init__(self, fs):
@@ -553,11 +677,9 @@ def test_rm_batches_through_a_filesystem_wrapper(monkeypatch):
         def __getattr__(self, name):
             return getattr(self._fs, name)
 
-    inner = RecordingGCSFileSystem()
-    fs = GuardWrapper(inner)
-    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    store = _ObjectStore("bucket", [f"prefix/part{index:04d}" for index in range(250)], page_size=250)
+    inner = RecordingGCSFileSystem(store)
+    _install_filesystem(monkeypatch, GuardWrapper(inner))
 
     result = CliRunner().invoke(cli, ["rm", "-R", "gs://bucket/prefix"])
 

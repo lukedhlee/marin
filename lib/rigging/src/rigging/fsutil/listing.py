@@ -22,6 +22,7 @@ from fsspec.asyn import sync
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
+from rigging.filesystem.protocols import is_gcs_filesystem, is_s3_filesystem
 from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.compression import compression_for
@@ -44,8 +45,9 @@ _MAX_SPLIT_DEPTH = 3
 _S3_LISTING_MAX_ATTEMPTS = 4
 _S3_LISTING_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0)
 
-# The largest page GCS serves for an object listing.
+# The largest page GCS serves for an object listing, and the kind it labels one with.
 _GCS_LISTING_PAGE_SIZE = 1000
+_GCS_OBJECT_LISTING_KIND = "storage#objects"
 
 # One page of a listing: ``(fs, path, continuation token, delimiter)`` in, entries and the
 # next token out. An empty delimiter lists every descendant, ``/`` only direct children.
@@ -193,8 +195,13 @@ def is_child(listed: str, name: str) -> bool:
 
     Object stores commonly report a zero-byte marker object for the prefix being
     listed; it carries no information and would render as an empty-named row.
+
+    Only one trailing separator is removed. An object key may contain an empty path
+    segment, so listing ``bucket/prefix/a`` reports the sub-prefix ``bucket/prefix/a//``.
+    Stripping every separator makes that read as the listed path itself, which drops the
+    prefix and everything below it from the listing.
     """
-    return name.strip("/") != listed.strip("/")
+    return name.removesuffix("/") != listed.removesuffix("/")
 
 
 def _entry(parsed: StoragePath, item: dict, *, name: str | None = None, url: str | None = None) -> Entry:
@@ -279,26 +286,6 @@ def _listing_filesystem(url: str, workers: int) -> tuple[Any, str]:
     if is_s3_filesystem(fs):
         fs.config_kwargs = {**fs.config_kwargs, "max_pool_connections": workers}
     return fs, path
-
-
-def is_s3_filesystem(fs) -> bool:
-    """Whether *fs* speaks S3, through any wrapper that forwards its protocol.
-
-    Backend dispatch tests the protocol rather than the class: ``filesystem_for`` may
-    return a guard that proxies the real filesystem without subclassing it, so an
-    ``isinstance`` check silently misses and drops the caller onto a slow generic path.
-    """
-    return "s3" in _protocols(fs)
-
-
-def is_gcs_filesystem(fs) -> bool:
-    """Whether *fs* speaks GCS, through any wrapper that forwards its protocol."""
-    return "gcs" in _protocols(fs) or "gs" in _protocols(fs)
-
-
-def _protocols(fs) -> tuple[str, ...]:
-    protocol = getattr(fs, "protocol", ())
-    return (protocol,) if isinstance(protocol, str) else tuple(protocol)
 
 
 def _metadata_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
@@ -469,7 +456,14 @@ def _gcs_listing_page(fs, path: str, page_token: str | None, delimiter: str) -> 
     gcsfs pages this call internally and returns only the accumulated whole, which holds
     a wide prefix entirely in memory. Driving ``pageToken`` here yields each page instead.
     ``_call`` carries gcsfs's own retry, so the caller needs none.
+
+    This reaches into gcsfs internals, which carry no compatibility promise. The checks
+    below turn a gcsfs rename into a named failure rather than a wrong listing, because
+    every command that lists GCS reaches this function.
     """
+    for attribute in ("_call", "_process_object", "loop"):
+        if not hasattr(fs, attribute):
+            raise RuntimeError(f"gcsfs no longer exposes {attribute!r}; rigging's paged GCS listing needs it")
     bucket, key, _ = fs.split_path(path)
     prefix = key if not key or key.endswith("/") else f"{key}/"
     page = sync(
@@ -484,9 +478,13 @@ def _gcs_listing_page(fs, path: str, page_token: str | None, delimiter: str) -> 
         pageToken=page_token,
         json_out=True,
     )
-    entries = [
-        {"name": f"{bucket}/{item}".rstrip("/"), "size": 0, "type": DIRECTORY_TYPE} for item in page.get("prefixes", [])
-    ]
+    kind = page.get("kind")
+    if kind != _GCS_OBJECT_LISTING_KIND:
+        raise RuntimeError(f"expected a {_GCS_OBJECT_LISTING_KIND} listing for {path}, got {kind!r}")
+    # The separator is kept, as the S3 lister keeps it. A prefix that ends in an empty
+    # path segment differs from its parent only by that separator, and gcsfs's own `ls`
+    # drops it, which makes the two indistinguishable.
+    entries = [{"name": f"{bucket}/{item}", "size": 0, "type": DIRECTORY_TYPE} for item in page.get("prefixes", [])]
     entries.extend(fs._process_object(bucket, item) for item in page.get("items", []))
     return entries, page.get("nextPageToken")
 
