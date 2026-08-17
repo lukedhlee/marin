@@ -322,7 +322,12 @@ def _ragged_dot_triton_bwd(residuals, dout):
     return dlhs, drhs, None  # None for group_sizes (integer, no gradient)
 
 
-_ragged_dot_triton_impl.defvjp(_ragged_dot_triton_fwd, _ragged_dot_triton_bwd)
+# optimize_remat lets jax.checkpoint rematerialize this custom_vjp's residuals instead of
+# saving them. The residuals are exactly the primal inputs (lhs, rhs, group_sizes), so under
+# a scan-over-layers with gradient checkpointing the default behavior pins every layer's
+# expert inputs AND gathered expert weights across the whole scan (~GBs/layer); with
+# optimize_remat they are re-derived in the backward like any other checkpointed value.
+_ragged_dot_triton_impl.defvjp(_ragged_dot_triton_fwd, _ragged_dot_triton_bwd, optimize_remat=True)
 
 
 def _ragged_dot_xla_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
