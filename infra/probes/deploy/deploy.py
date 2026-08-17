@@ -8,7 +8,7 @@ Subcommands:
     build    docker build, tag with git sha + "latest", push to Artifact Registry.
     apply    roll the prod VM to the "latest" image.
     status   show VM state + tail container logs.
-    create   one-time: service account, IAM bindings, and the COS VM itself.
+    create   one-time: create the COS VM itself.
 
 Run with ``uv run deploy/deploy.py <command>`` (click resolves from the project
 venv), or ``python deploy/deploy.py <command>`` if click is on the path.
@@ -19,20 +19,10 @@ import subprocess
 from pathlib import Path
 
 import click
-from rigging.filesystem.cluster_config import load_cluster_config
 
 logger = logging.getLogger("deploy")
 
-_MARIN_CONFIG = load_cluster_config("marin")
-
 IMAGE_NAME = "infra-probes"
-# The probes daemon writes its JSONL roll-ups under this bucket+prefix (see
-# infra_probes.py). Rolling a day up overwrites a deterministic per-day object
-# when a stranded local file is re-uploaded after a restart, so the SA needs
-# create+get+delete — granted via objectUser, scoped by IAM condition to the
-# prefix so the canary can't touch the rest of this shared data bucket.
-RESULTS_BUCKET = _MARIN_CONFIG.region_buckets["us-central1"].name
-RESULTS_GCS_PREFIX = "infra/probes"
 RESULTS_HOST_PATH = "/var/lib/probes"
 # Build context / git repo root for `build`: this script lives in deploy/.
 PROBES_DIR = Path(__file__).resolve().parent.parent
@@ -170,67 +160,14 @@ def status(cfg: dict[str, str]) -> None:
 @click.option("--machine-type", default="e2-small", show_default=True)
 @click.pass_obj
 def create(cfg: dict[str, str], iris_endpoint: str, machine_type: str) -> None:
-    """One-time: create the service account, IAM bindings, and the COS VM.
+    """One-time: create the COS VM.
 
-    Idempotent enough to re-run: gcloud add-iam-policy-binding is a no-op when the
-    binding exists, but the service-account and instance creates fail if they
-    already exist — delete them first to recreate.
+    The instance create fails if it already exists. The service account and its
+    IAM access are declared by the marin Pulumi stack.
     """
     project = cfg["project"]
-    region = cfg["region"]
     sa = _service_account(project)
-    member = f"serviceAccount:{sa}"
 
-    logger.info("Creating service account %s", sa)
-    _run(["gcloud", "iam", "service-accounts", "create", IMAGE_NAME, f"--project={project}"])
-
-    # SA needs: pull image, ship stdout to Cloud Logging, manage GCS roll-ups.
-    logger.info("Granting IAM roles to %s", sa)
-    _run(
-        [
-            "gcloud",
-            "artifacts",
-            "repositories",
-            "add-iam-policy-binding",
-            "marin",
-            f"--project={project}",
-            f"--location={region}",
-            f"--member={member}",
-            "--role=roles/artifactregistry.reader",
-        ]
-    )
-    _run(
-        [
-            "gcloud",
-            "projects",
-            "add-iam-policy-binding",
-            project,
-            f"--member={member}",
-            "--role=roles/logging.logWriter",
-            "--condition=None",
-        ]
-    )
-    # objectUser (create/get/delete) restricted to the roll-up prefix. The
-    # bucket-scoped objects.list it implies is intentionally not covered by the
-    # object-name condition; gcsfs only uses list to sniff bucket type and falls
-    # back gracefully, so the upload still succeeds.
-    prefix_condition = (
-        f'expression=resource.name.startsWith("projects/_/buckets/{RESULTS_BUCKET}'
-        f'/objects/{RESULTS_GCS_PREFIX}/"),title=infra-probes-prefix,'
-        "description=Limit infra-probes SA object access to its rollup prefix"
-    )
-    _run(
-        [
-            "gcloud",
-            "storage",
-            "buckets",
-            "add-iam-policy-binding",
-            f"gs://{RESULTS_BUCKET}",
-            f"--member={member}",
-            "--role=roles/storage.objectUser",
-            f"--condition={prefix_condition}",
-        ]
-    )
     # The host mount persists the JSONL across container restarts; the
     # startup-script makes it writable by the uid-1000 container.
     startup_script = f"#!/bin/bash\nmkdir -p {RESULTS_HOST_PATH} && chown 1000:1000 {RESULTS_HOST_PATH}"

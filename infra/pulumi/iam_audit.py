@@ -26,6 +26,7 @@ from iac.gcp.iam_config import (
     IAM_DATA_PATH,
     GcpIamConfig,
     GcpPrincipal,
+    effective_iam_config,
     load_iam_config,
     replace_principals,
     write_iam_config,
@@ -120,6 +121,7 @@ def _audit_principals(path: Path) -> tuple[AuditPrincipal, ...]:
 
 def _iter_grants(config: GcpIamConfig) -> Iterator[tuple[str, str, GcpRoleGrant]]:
     """Yield (container, resource, grant) for every declared role grant."""
+    config = effective_iam_config(config)
     for grant in config.project_grants:
         yield "project_grants", PROJECT, grant
     key_id = crypto_key_id(config)

@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,11 @@ from iac.gcp.iam_config import (
     IAM_DATA_PATH,
     GcpIamConfig,
     GcpPrincipal,
+    GcpServiceAccess,
+    GcpServiceArtifactRepositoryAccess,
+    GcpServiceBucketAccess,
+    GcpServiceSecretAccess,
+    effective_iam_config,
     grant_project_roles,
     load_iam_config,
     replace_principals,
@@ -25,6 +31,7 @@ def _config(*, principals: tuple[GcpPrincipal, ...] = ()) -> GcpIamConfig:
         principals=principals,
         custom_roles=(),
         owned_service_accounts=(),
+        service_access=(),
         project_grants=(
             GcpRoleGrant(
                 role="roles/logging.viewer",
@@ -37,6 +44,62 @@ def _config(*, principals: tuple[GcpPrincipal, ...] = ()) -> GcpIamConfig:
         artifact_repositories=(),
         service_accounts=(),
     )
+
+
+def _service_access(member: str = "serviceAccount:service@example.iam.gserviceaccount.com") -> GcpServiceAccess:
+    return GcpServiceAccess(
+        name="service",
+        member=member,
+        project_roles=("roles/logging.logWriter",),
+        secrets=(
+            GcpServiceSecretAccess(
+                secret="service-token",
+                role="roles/secretmanager.secretAccessor",
+            ),
+        ),
+        buckets=(
+            GcpServiceBucketAccess(
+                bucket="service-results",
+                role="roles/storage.objectUser",
+                object_prefix="results/",
+            ),
+        ),
+        artifact_repositories=(
+            GcpServiceArtifactRepositoryAccess(
+                location="us-central1",
+                repository="service",
+                role="roles/artifactregistry.reader",
+            ),
+        ),
+    )
+
+
+def test_effective_iam_config_groups_service_access_by_resource() -> None:
+    service = _service_access()
+    effective = effective_iam_config(replace(_config(), service_access=(service,)))
+
+    logging_grant = next(grant for grant in effective.project_grants if grant.role == "roles/logging.logWriter")
+    assert logging_grant.members == (service.member,)
+    assert effective.secrets[0].secret == "service-token"
+    assert effective.secrets[0].grants[0].members == (service.member,)
+    assert effective.artifact_repositories[0].repository == "service"
+    assert effective.artifact_repositories[0].grants[0].members == (service.member,)
+
+    bucket_grant = effective.buckets[0].grants[0]
+    assert bucket_grant.members == (service.member,)
+    assert bucket_grant.condition is not None
+    assert bucket_grant.condition.title == "service-prefix"
+    assert bucket_grant.condition.expression == (
+        'resource.name.startsWith("projects/_/buckets/service-results/objects/results/")'
+    )
+
+
+def test_effective_iam_config_rejects_duplicate_service_grant() -> None:
+    service = _service_access(member="serviceAccount:logs@example.iam.gserviceaccount.com")
+    service = replace(service, project_roles=("roles/logging.viewer",), secrets=(), buckets=(), artifact_repositories=())
+
+    with pytest.raises(ValueError, match="declared more than once"):
+        effective_iam_config(replace(_config(), service_access=(service,)))
 
 
 def test_grant_project_roles_reuses_principal_across_roles(tmp_path: Path) -> None:

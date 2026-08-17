@@ -86,13 +86,23 @@ overridden per-command (`--project`, `--zone`, …) or via `MARIN_PROBES_*` env 
 
 ### One-time VM creation
 
-`create` provisions the service account (image pull, Cloud Logging, and GCS
-roll-ups), its IAM bindings, and the COS VM in one shot. Marin Iris IAP access
-is declared by `provisioning.gcp.gclb` in `lib/iris/config/marin.yaml`:
+`create` provisions the COS VM. The `marin` Pulumi stack owns the
+`infra-probes` service account and groups its Artifact Registry, Cloud Logging,
+and prefix-scoped GCS roll-up access under `service_access` in
+`infra/pulumi/src/iac/gcp/iam_data.yaml`. Apply that stack before creating the
+VM. Marin Iris access remains in the target clusters' `allowed_submitters`:
 
 ```bash
+uv sync --package marin-iac --extra deploy
+PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" pulumi -C infra/pulumi up --stack marin
+
+cd infra/probes
 uv run deploy/deploy.py create    # --iris-endpoint / --machine-type to override
 ```
+
+For an existing service account or IAM member, use the
+[Program-first import workflow](../pulumi/README.md#adopting-live-resources) before the normal
+stack update.
 
 The VM gets a `/var/lib/probes` host mount that persists the JSONL across
 container restarts, plus a startup-script that makes it writable by the uid-1000

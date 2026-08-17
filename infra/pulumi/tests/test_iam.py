@@ -12,6 +12,7 @@ from iac.gcp.iam import (
     GcpCustomRole,
     GcpIam,
     GcpIamArgs,
+    GcpIamCondition,
     GcpOwnedServiceAccount,
     GcpRoleGrant,
     GcpSecretIam,
@@ -64,7 +65,21 @@ def _args() -> GcpIamArgs:
         project_grants=(_grant(),),
         kms_grants=(_grant(),),
         secrets=(GcpSecretIam(secret="test-secret", grants=(_grant(),)),),
-        buckets=(GcpBucketIam(bucket="test-bucket", grants=(_grant(),)),),
+        buckets=(
+            GcpBucketIam(
+                bucket="test-bucket",
+                grants=(
+                    GcpRoleGrant(
+                        role="roles/viewer",
+                        members=("serviceAccount:reader@example.com",),
+                        condition=GcpIamCondition(
+                            title="records-prefix",
+                            expression='resource.name.startsWith("projects/_/buckets/test-bucket/objects/records/")',
+                        ),
+                    ),
+                ),
+            ),
+        ),
         artifact_repositories=(
             GcpArtifactRepositoryIam(location="us-central1", repository="test-repository", grants=(_grant(),)),
         ),
@@ -128,7 +143,7 @@ def test_gcp_iam_catalogs_provider_ids_without_in_program_imports(monkeypatch):
         SECRET_IAM_MEMBER_TYPE: (
             f"projects/{TEST_PROJECT}/secrets/test-secret roles/viewer serviceAccount:reader@example.com"
         ),
-        BUCKET_IAM_MEMBER_TYPE: "b/test-bucket roles/viewer serviceAccount:reader@example.com",
+        BUCKET_IAM_MEMBER_TYPE: "b/test-bucket roles/viewer serviceAccount:reader@example.com records-prefix",
         ARTIFACT_REPOSITORY_IAM_MEMBER_TYPE: (
             f"projects/{TEST_PROJECT}/locations/us-central1/repositories/test-repository "
             "roles/viewer serviceAccount:reader@example.com"

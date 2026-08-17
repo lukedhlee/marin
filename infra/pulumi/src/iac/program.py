@@ -47,7 +47,7 @@ from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
 from iac.gcp.gclb import ControllerIngress, FinelogIngress, GcpGclbIap, GcpGclbIapArgs
 from iac.gcp.iam import GcpIam, GcpIamArgs
-from iac.gcp.iam_config import load_iam_config
+from iac.gcp.iam_config import effective_iam_config, load_iam_config
 from iac.gcp.registries import GcpArtifactRegistries, GcpArtifactRegistriesArgs
 from iac.imports import NO_IMPORTS, ImportRegistrar
 from iac.nodepools import derive_nodepools
@@ -325,7 +325,7 @@ def _build_gcp(cluster: str, *, imports: ImportRegistrar) -> None:
     provisioning = load_provisioning(cluster)
     assert provisioning.gcp is not None  # guaranteed by load_provisioning
     gcp_provisioning = provisioning.gcp
-    iam_config = load_iam_config()
+    iam_config = effective_iam_config(load_iam_config())
     gcp_data_config = load_cluster_config_from_dirs(cluster, IAC_DATA_CONFIG_DIRS)
     s3_data_config = load_cluster_config_from_dirs("coreweave", IAC_DATA_CONFIG_DIRS)
 

@@ -84,6 +84,18 @@ review. `iam_audit.py` bulk-rotates the principals declared in `iam_data.yaml`. 
 decrypting, or applying needs `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the marin-iac
 key ("Backend").
 
+Machine identities with grants on more than one resource use the `service_access` section in
+`iam_data.yaml`. One record groups a service account's project roles, secret access, Artifact
+Registry access, and GCS bucket access. An `object_prefix` on a bucket entry produces a CEL
+condition scoped to that bucket-relative object prefix; omit it only when the service needs the
+role across the whole bucket. The loader lowers these records to the same non-authoritative IAM
+member resources as the resource-oriented inventory and rejects duplicate declarations.
+
+The `marin` stack also owns service accounts listed under `owned_service_accounts`. Import an
+existing account and any live conditional grant with the Program-first workflow below before
+running the normal update. Service deployment scripts must not recreate IAM bindings listed in
+`service_access`.
+
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
 while their values remain outside Pulumi.

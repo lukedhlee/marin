@@ -3,6 +3,7 @@
 
 """Load and edit the machine-readable GCP IAM declaration."""
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -29,7 +30,7 @@ PRINCIPAL_ID_PREFIX = "human-"
 PRINCIPAL_ID_PATTERN = rf"{PRINCIPAL_ID_PREFIX}\d{{3,}}"
 
 _PRINCIPAL_ID_RE = re.compile(PRINCIPAL_ID_PATTERN)
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _PLAIN_MEMBER_PREFIXES = (
     "domain:",
     "group:",
@@ -48,6 +49,8 @@ _YAML_HEADER = """\
 # Canonical non-authoritative GCP IAM declaration for hai-gcp-models. Human
 # user principals are KMS ciphertexts declared once under `principals`; grants
 # reference their opaque IDs so one principal cannot drift across roles.
+# Machine principals with grants on several resources are grouped under
+# `service_access`; the loader lowers them to the resource-oriented model.
 #
 # The owned service account and custom roles came from the retired
 # infra/permissions project. Do not add custom roles found live unless Pulumi
@@ -88,6 +91,44 @@ class GcpPrincipal:
 
 
 @dataclass(frozen=True)
+class GcpServiceSecretAccess:
+    """One service account's role on a Secret Manager secret."""
+
+    secret: str
+    role: str
+
+
+@dataclass(frozen=True)
+class GcpServiceBucketAccess:
+    """One service account's role on a GCS bucket or object-name prefix."""
+
+    bucket: str
+    role: str
+    object_prefix: str | None = None
+
+
+@dataclass(frozen=True)
+class GcpServiceArtifactRepositoryAccess:
+    """One service account's role on an Artifact Registry repository."""
+
+    location: str
+    repository: str
+    role: str
+
+
+@dataclass(frozen=True)
+class GcpServiceAccess:
+    """The project and resource grants reviewed together for one service account."""
+
+    name: str
+    member: str
+    project_roles: tuple[str, ...]
+    secrets: tuple[GcpServiceSecretAccess, ...]
+    buckets: tuple[GcpServiceBucketAccess, ...]
+    artifact_repositories: tuple[GcpServiceArtifactRepositoryAccess, ...]
+
+
+@dataclass(frozen=True)
 class GcpIamConfig:
     """The complete checked-in IAM declaration before Pulumi stack settings."""
 
@@ -97,6 +138,7 @@ class GcpIamConfig:
     principals: tuple[GcpPrincipal, ...]
     custom_roles: tuple[GcpCustomRole, ...]
     owned_service_accounts: tuple[GcpOwnedServiceAccount, ...]
+    service_access: tuple[GcpServiceAccess, ...]
     project_grants: tuple[GcpRoleGrant, ...]
     kms_grants: tuple[GcpRoleGrant, ...]
     secrets: tuple[GcpSecretIam, ...]
@@ -272,6 +314,110 @@ def _parse_owned_service_accounts(value: object) -> tuple[GcpOwnedServiceAccount
     return tuple(accounts)
 
 
+def _parse_service_access(value: object) -> tuple[GcpServiceAccess, ...]:
+    services = []
+    for index, raw_service in enumerate(_sequence(value, "service_access")):
+        path = f"service_access[{index}]"
+        fields = _fields(
+            raw_service,
+            path,
+            required=frozenset({"name", "member"}),
+            optional=frozenset({"project_roles", "secrets", "buckets", "artifact_repositories"}),
+        )
+        name = _string(fields["name"], f"{path}.name")
+        member = _string(fields["member"], f"{path}.member")
+        _validate_plain_member(member, f"{path}.member")
+        if not member.startswith("serviceAccount:"):
+            raise ValueError(f"{path}.member must be a serviceAccount: principal")
+
+        project_roles = tuple(
+            _string(role, f"{path}.project_roles[{role_index}]")
+            for role_index, role in enumerate(_sequence(fields.get("project_roles", []), f"{path}.project_roles"))
+        )
+        if len(project_roles) != len(set(project_roles)):
+            raise ValueError(f"{path}.project_roles contains duplicates")
+
+        secrets = []
+        for secret_index, raw_secret in enumerate(_sequence(fields.get("secrets", []), f"{path}.secrets")):
+            secret_path = f"{path}.secrets[{secret_index}]"
+            secret_fields = _fields(raw_secret, secret_path, required=frozenset({"secret", "role"}))
+            secrets.append(
+                GcpServiceSecretAccess(
+                    secret=_string(secret_fields["secret"], f"{secret_path}.secret"),
+                    role=_string(secret_fields["role"], f"{secret_path}.role"),
+                )
+            )
+        if len(secrets) != len(set(secrets)):
+            raise ValueError(f"{path}.secrets contains duplicates")
+
+        buckets = []
+        for bucket_index, raw_bucket in enumerate(_sequence(fields.get("buckets", []), f"{path}.buckets")):
+            bucket_path = f"{path}.buckets[{bucket_index}]"
+            bucket_fields = _fields(
+                raw_bucket,
+                bucket_path,
+                required=frozenset({"bucket", "role"}),
+                optional=frozenset({"object_prefix"}),
+            )
+            object_prefix_value = bucket_fields.get("object_prefix")
+            object_prefix = (
+                _string(object_prefix_value, f"{bucket_path}.object_prefix") if object_prefix_value is not None else None
+            )
+            if object_prefix is not None and (not object_prefix or object_prefix.startswith("/")):
+                raise ValueError(f"{bucket_path}.object_prefix must be a non-empty bucket-relative prefix")
+            buckets.append(
+                GcpServiceBucketAccess(
+                    bucket=_string(bucket_fields["bucket"], f"{bucket_path}.bucket"),
+                    role=_string(bucket_fields["role"], f"{bucket_path}.role"),
+                    object_prefix=object_prefix,
+                )
+            )
+        bucket_grant_ids = [(access.bucket, access.role) for access in buckets]
+        if len(bucket_grant_ids) != len(set(bucket_grant_ids)):
+            raise ValueError(f"{path}.buckets contains duplicate bucket/role grants")
+
+        repositories = []
+        for repository_index, raw_repository in enumerate(
+            _sequence(fields.get("artifact_repositories", []), f"{path}.artifact_repositories")
+        ):
+            repository_path = f"{path}.artifact_repositories[{repository_index}]"
+            repository_fields = _fields(
+                raw_repository,
+                repository_path,
+                required=frozenset({"location", "repository", "role"}),
+            )
+            repositories.append(
+                GcpServiceArtifactRepositoryAccess(
+                    location=_string(repository_fields["location"], f"{repository_path}.location"),
+                    repository=_string(repository_fields["repository"], f"{repository_path}.repository"),
+                    role=_string(repository_fields["role"], f"{repository_path}.role"),
+                )
+            )
+        if len(repositories) != len(set(repositories)):
+            raise ValueError(f"{path}.artifact_repositories contains duplicates")
+
+        if not any((project_roles, secrets, buckets, repositories)):
+            raise ValueError(f"{path} must declare at least one access grant")
+        services.append(
+            GcpServiceAccess(
+                name=name,
+                member=member,
+                project_roles=project_roles,
+                secrets=tuple(secrets),
+                buckets=tuple(buckets),
+                artifact_repositories=tuple(repositories),
+            )
+        )
+
+    names = [service.name for service in services]
+    if len(names) != len(set(names)):
+        raise ValueError("service_access contains duplicate names")
+    members = [service.member for service in services]
+    if len(members) != len(set(members)):
+        raise ValueError("service_access contains duplicate members")
+    return tuple(services)
+
+
 def _parse_secrets(value: object, principals: dict[str, GcpEncryptedMember]) -> tuple[GcpSecretIam, ...]:
     secrets = []
     for index, raw_secret in enumerate(_sequence(value, "secrets")):
@@ -346,6 +492,7 @@ def load_iam_config(path: Path = IAM_DATA_PATH) -> GcpIamConfig:
                 "principals",
                 "custom_roles",
                 "owned_service_accounts",
+                "service_access",
                 "project_grants",
                 "kms_grants",
                 "secrets",
@@ -372,12 +519,168 @@ def load_iam_config(path: Path = IAM_DATA_PATH) -> GcpIamConfig:
         principals=principal_records,
         custom_roles=_parse_custom_roles(fields["custom_roles"]),
         owned_service_accounts=_parse_owned_service_accounts(fields["owned_service_accounts"]),
+        service_access=_parse_service_access(fields["service_access"]),
         project_grants=_parse_grants(fields["project_grants"], "project_grants", principals),
         kms_grants=_parse_grants(fields["kms_grants"], "kms_grants", principals),
         secrets=_parse_secrets(fields["secrets"], principals),
         buckets=_parse_buckets(fields["buckets"], principals),
         artifact_repositories=_parse_artifact_repositories(fields["artifact_repositories"], principals),
         service_accounts=_parse_service_accounts(fields["service_accounts"], principals),
+    )
+
+
+def _grant_with_member(
+    grants: tuple[GcpRoleGrant, ...],
+    *,
+    role: str,
+    member: str,
+    condition: GcpIamCondition | None,
+    source: str,
+) -> tuple[GcpRoleGrant, ...]:
+    condition_title = condition.title if condition is not None else None
+    for grant in grants:
+        grant_title = grant.condition.title if grant.condition is not None else None
+        if grant.role == role and grant_title == condition_title and member in grant.members:
+            raise ValueError(f"{source} is declared more than once")
+
+    for index, grant in enumerate(grants):
+        if grant.role == role and grant.condition == condition:
+            updated = replace(grant, members=(*grant.members, member))
+            return (*grants[:index], updated, *grants[index + 1 :])
+    return (*grants, GcpRoleGrant(role=role, members=(member,), condition=condition))
+
+
+def _service_bucket_condition(service: GcpServiceAccess, access: GcpServiceBucketAccess) -> GcpIamCondition | None:
+    if access.object_prefix is None:
+        return None
+    resource_prefix = f"projects/_/buckets/{access.bucket}/objects/{access.object_prefix}"
+    return GcpIamCondition(
+        title=f"{service.name}-prefix",
+        expression=f"resource.name.startsWith({json.dumps(resource_prefix)})",
+        description=f"Limit {service.name} object access to its {access.object_prefix} prefix",
+    )
+
+
+def _secret_access(
+    secrets: tuple[GcpSecretIam, ...],
+    service: GcpServiceAccess,
+    access: GcpServiceSecretAccess,
+) -> tuple[GcpSecretIam, ...]:
+    indexes = [index for index, secret in enumerate(secrets) if secret.secret == access.secret]
+    if len(indexes) > 1:
+        raise ValueError(f"secret {access.secret!r} has multiple IAM declarations")
+    grant_source = f"service_access.{service.name}.secrets.{access.secret}.{access.role}"
+    if not indexes:
+        grant = GcpRoleGrant(role=access.role, members=(service.member,))
+        return (*secrets, GcpSecretIam(secret=access.secret, grants=(grant,)))
+    index = indexes[0]
+    secret = secrets[index]
+    updated = replace(
+        secret,
+        grants=_grant_with_member(
+            secret.grants,
+            role=access.role,
+            member=service.member,
+            condition=None,
+            source=grant_source,
+        ),
+    )
+    return (*secrets[:index], updated, *secrets[index + 1 :])
+
+
+def _bucket_access(
+    buckets: tuple[GcpBucketIam, ...],
+    service: GcpServiceAccess,
+    access: GcpServiceBucketAccess,
+) -> tuple[GcpBucketIam, ...]:
+    indexes = [index for index, bucket in enumerate(buckets) if bucket.bucket == access.bucket]
+    if len(indexes) > 1:
+        raise ValueError(f"bucket {access.bucket!r} has multiple IAM declarations")
+    condition = _service_bucket_condition(service, access)
+    grant_source = f"service_access.{service.name}.buckets.{access.bucket}.{access.role}"
+    if not indexes:
+        grant = GcpRoleGrant(role=access.role, members=(service.member,), condition=condition)
+        return (*buckets, GcpBucketIam(bucket=access.bucket, grants=(grant,)))
+    index = indexes[0]
+    bucket = buckets[index]
+    updated = replace(
+        bucket,
+        grants=_grant_with_member(
+            bucket.grants,
+            role=access.role,
+            member=service.member,
+            condition=condition,
+            source=grant_source,
+        ),
+    )
+    return (*buckets[:index], updated, *buckets[index + 1 :])
+
+
+def _artifact_repository_access(
+    repositories: tuple[GcpArtifactRepositoryIam, ...],
+    service: GcpServiceAccess,
+    access: GcpServiceArtifactRepositoryAccess,
+) -> tuple[GcpArtifactRepositoryIam, ...]:
+    indexes = [
+        index
+        for index, repository in enumerate(repositories)
+        if (repository.location, repository.repository) == (access.location, access.repository)
+    ]
+    repository_id = f"{access.location}/{access.repository}"
+    if len(indexes) > 1:
+        raise ValueError(f"artifact repository {repository_id} has multiple IAM declarations")
+    grant_source = f"service_access.{service.name}.artifact_repositories.{repository_id}.{access.role}"
+    if not indexes:
+        grant = GcpRoleGrant(role=access.role, members=(service.member,))
+        repository = GcpArtifactRepositoryIam(
+            location=access.location,
+            repository=access.repository,
+            grants=(grant,),
+        )
+        return (*repositories, repository)
+    index = indexes[0]
+    repository = repositories[index]
+    updated = replace(
+        repository,
+        grants=_grant_with_member(
+            repository.grants,
+            role=access.role,
+            member=service.member,
+            condition=None,
+            source=grant_source,
+        ),
+    )
+    return (*repositories[:index], updated, *repositories[index + 1 :])
+
+
+def effective_iam_config(config: GcpIamConfig) -> GcpIamConfig:
+    """Lower service-oriented access into the resource-oriented grants consumed by Pulumi."""
+    project_grants = config.project_grants
+    secrets = config.secrets
+    buckets = config.buckets
+    repositories = config.artifact_repositories
+    for service in config.service_access:
+        for role in service.project_roles:
+            project_grants = _grant_with_member(
+                project_grants,
+                role=role,
+                member=service.member,
+                condition=None,
+                source=f"service_access.{service.name}.project_roles.{role}",
+            )
+        for access in service.secrets:
+            secrets = _secret_access(secrets, service, access)
+        for access in service.buckets:
+            buckets = _bucket_access(buckets, service, access)
+        for access in service.artifact_repositories:
+            repositories = _artifact_repository_access(repositories, service, access)
+    return replace(
+        config,
+        service_access=(),
+        project_grants=project_grants,
+        secrets=secrets,
+        buckets=buckets,
+        artifact_repositories=repositories,
     )
 
 
@@ -412,6 +715,33 @@ def _grants_data(grants: tuple[GcpRoleGrant, ...], principal_ids: dict[str, str]
     return [_grant_data(grant, principal_ids) for grant in grants]
 
 
+def _service_access_data(service: GcpServiceAccess) -> dict[str, object]:
+    data: dict[str, object] = {"name": service.name, "member": service.member}
+    if service.project_roles:
+        data["project_roles"] = list(service.project_roles)
+    if service.secrets:
+        data["secrets"] = [{"secret": access.secret, "role": access.role} for access in service.secrets]
+    if service.buckets:
+        data["buckets"] = [
+            {
+                "bucket": access.bucket,
+                "role": access.role,
+                **({"object_prefix": access.object_prefix} if access.object_prefix is not None else {}),
+            }
+            for access in service.buckets
+        ]
+    if service.artifact_repositories:
+        data["artifact_repositories"] = [
+            {
+                "location": access.location,
+                "repository": access.repository,
+                "role": access.role,
+            }
+            for access in service.artifact_repositories
+        ]
+    return data
+
+
 def iam_config_data(config: GcpIamConfig) -> dict[str, object]:
     """Return the canonical YAML-compatible representation."""
     principal_ids = {principal.ciphertext: principal.principal_id for principal in config.principals}
@@ -438,6 +768,7 @@ def iam_config_data(config: GcpIamConfig) -> dict[str, object]:
             {"account_id": account.account_id, "display_name": account.display_name}
             for account in config.owned_service_accounts
         ],
+        "service_access": [_service_access_data(service) for service in config.service_access],
         "project_grants": _grants_data(config.project_grants, principal_ids),
         "kms_grants": _grants_data(config.kms_grants, principal_ids),
         "secrets": [

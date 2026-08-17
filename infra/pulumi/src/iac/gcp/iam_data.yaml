@@ -4,6 +4,8 @@
 # Canonical non-authoritative GCP IAM declaration for hai-gcp-models. Human
 # user principals are KMS ciphertexts declared once under `principals`; grants
 # reference their opaque IDs so one principal cannot drift across roles.
+# Machine principals with grants on several resources are grouped under
+# `service_access`; the loader lowers them to the resource-oriented model.
 #
 # The owned service account and custom roles came from the retired
 # infra/permissions project. Do not add custom roles found live unless Pulumi
@@ -11,7 +13,7 @@
 #
 # GCP does not support resource-based IAM Conditions for iam.googleapis.com
 # permissions. Custom-role-management grants therefore remain project-wide.
-schema_version: 1
+schema_version: 2
 kms:
   location: us-central1
   key_ring: marin-iac-keyring
@@ -792,8 +794,38 @@ custom_roles:
   permissions:
   - artifactregistry.repositories.downloadArtifacts
 owned_service_accounts:
+- account_id: infra-probes
+  display_name: Infra probes
 - account_id: pulumi-ci
   display_name: Pulumi CI preview (read-only)
+service_access:
+- name: infra-probes
+  member: serviceAccount:infra-probes@hai-gcp-models.iam.gserviceaccount.com
+  project_roles:
+  - roles/logging.logWriter
+  buckets:
+  - bucket: marin-us-central1
+    role: roles/storage.objectUser
+    object_prefix: infra/probes/
+  artifact_repositories:
+  - location: us-central1
+    repository: marin
+    role: roles/artifactregistry.reader
+- name: marin-evaldash
+  member: serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
+  project_roles:
+  - roles/cloudsql.client
+  - roles/compute.viewer
+  secrets:
+  - secret: cloudsql-evals-password
+    role: roles/secretmanager.secretAccessor
+  - secret: cw-object-storage-key-id
+    role: roles/secretmanager.secretAccessor
+  - secret: cw-object-storage-key-secret
+    role: roles/secretmanager.secretAccessor
+  buckets:
+  - bucket: marin-eval-metadata
+    role: roles/storage.objectViewer
 project_grants:
 - role: projects/hai-gcp-models/roles/RayWorker
   members:
@@ -961,7 +993,6 @@ project_grants:
   - serviceAccount:echo-sync@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
 - role: roles/cloudsql.instanceUser
@@ -1079,7 +1110,6 @@ project_grants:
   - serviceAccount:github-ci-tpu-launcher-306@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:iris-iap-proxy@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/container.serviceAgent
   members:
@@ -1221,7 +1251,6 @@ project_grants:
   - serviceAccount:github-actions-logging@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/logging.logWriter
   members:
-  - serviceAccount:infra-probes@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:instance-deleter@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:iris-controller@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:iris-worker@hai-gcp-models.iam.gserviceaccount.com
@@ -1378,7 +1407,6 @@ project_grants:
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-crawl-bigquery@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-data-browser@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-gcs-proxy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/storageinsights.serviceAgent
   members:
@@ -1453,11 +1481,6 @@ secrets:
   - role: roles/secretmanager.secretAccessor
     members:
     - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-- secret: cloudsql-evals-password
-  grants:
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
 - secret: cloudsql-grafana-password
   grants:
   - role: projects/hai-gcp-models/roles/marinSecretIamManager
@@ -1466,16 +1489,6 @@ secrets:
   - role: roles/secretmanager.secretAccessor
     members:
     - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
-- secret: cw-object-storage-key-id
-  grants:
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
-- secret: cw-object-storage-key-secret
-  grants:
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
 - secret: github-yifanmai-github-oauthtoken-4baa2b
   grants:
   - role: roles/secretmanager.secretAccessor
@@ -1650,12 +1663,6 @@ artifact_repositories:
   - role: roles/artifactregistry.reader
     members:
     - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
-- location: us-central1
-  repository: marin
-  grants:
-  - role: roles/artifactregistry.reader
-    members:
-    - serviceAccount:infra-probes@hai-gcp-models.iam.gserviceaccount.com
 - location: us-central1
   repository: marin-evaldash
   grants:
