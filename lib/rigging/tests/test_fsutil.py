@@ -13,6 +13,7 @@ import os
 import threading
 from datetime import UTC, datetime
 
+import fsspec.asyn
 import pytest
 import rigging.fsutil.cli as cli_module
 import rigging.fsutil.transfer as transfer_module
@@ -413,6 +414,64 @@ def test_rm_uses_s3_bulk_delete_batches(monkeypatch):
     assert {item["Key"] for batch in batches for item in batch} == {f"prefix/{index}" for index in range(1001)}
 
 
+class _FakeGCSFileSystem:
+    """A GCS stub that serves the JSON listing API one page at a time, as GCS does.
+
+    The flat prefix it serves has no sub-prefixes to split across threads, which is the
+    layout that forces the listing through paging rather than fan-out.
+    """
+
+    protocol = ("gs", "gcs")
+    page_size = 100
+
+    def __init__(self, object_count):
+        self.object_count = object_count
+        self.loop = fsspec.asyn.get_loop()
+        self.pages_served = 0
+
+    def isdir(self, _path):
+        return True
+
+    def split_path(self, path):
+        bucket, key = path.split("/", 1)
+        return bucket, key, None
+
+    async def _call(self, _method, _url, _bucket, *, pageToken=None, **_kwargs):
+        start = int(pageToken or 0)
+        end = min(start + self.page_size, self.object_count)
+        self.pages_served += 1
+        page = {"items": [{"index": index} for index in range(start, end)]}
+        if end < self.object_count:
+            page["nextPageToken"] = str(end)
+        return page
+
+    def _process_object(self, bucket, item):
+        return {"name": f"{bucket}/prefix/{item['index']}", "size": 1, "type": "file"}
+
+    def rm(self, paths, **_kwargs):
+        pass
+
+    def invalidate_cache(self):
+        pass
+
+
+def test_rm_pages_a_flat_gcs_prefix(monkeypatch):
+    """A flat GCS prefix has no sub-prefixes, so paging is the only way to stream it.
+
+    gcsfs accumulates every page before it returns, which puts the whole prefix in memory
+    and delays the first delete until the scan completes.
+    """
+    fs = _FakeGCSFileSystem(object_count=450)
+    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+
+    pages = list(listing.metadata_listing_pages("gs://bucket/prefix", workers=4))
+
+    assert fs.pages_served > 1, "a flat prefix must arrive over several pages"
+    assert sum(len(page.entries) for page in pages) == 450
+
+
 class _BulkDeleteS3FileSystem:
     """An S3 stub whose bulk delete reports per-key failures in the response body."""
 
@@ -479,24 +538,13 @@ def test_rm_batches_through_a_filesystem_wrapper(monkeypatch):
     collapses to one object per request.
     """
 
-    class RecordingGCSFileSystem:
-        protocol = ("gs", "gcs")
-
+    class RecordingGCSFileSystem(_FakeGCSFileSystem):
         def __init__(self):
+            super().__init__(object_count=250)
             self.batch_sizes = []
-
-        def isdir(self, _path):
-            return True
-
-        def ls(self, path, detail):
-            assert detail is True
-            return [{"name": f"{path}/{index}", "size": 1, "type": "file"} for index in range(250)]
 
         def rm(self, paths, **_kwargs):
             self.batch_sizes.append(len(paths))
-
-        def invalidate_cache(self):
-            pass
 
     class GuardWrapper:
         def __init__(self, fs):
@@ -687,7 +735,8 @@ def test_ls_glob_renders_matches_with_listing_metadata(monkeypatch):
 
 def test_du_scans_directories_in_parallel_using_listing_metadata(monkeypatch):
     class ParallelListingFileSystem:
-        protocol = "gcs"
+        # A backend with no paged listing API, which is what the `ls` walk below serves.
+        protocol = "file"
 
         def __init__(self):
             self.child_listings_started = threading.Barrier(2)

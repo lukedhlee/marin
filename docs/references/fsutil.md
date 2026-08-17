@@ -85,9 +85,11 @@ destination directories may not overlap.
 `hash` reads each complete object. Its columns are `url` and `md5`; digests use base64
 by default. `--hex` selects hexadecimal output.
 
-`du` scans prefixes with up to 128 concurrent metadata-bearing listings. S3 prefixes
-that exceed one listing page are split at the next `/` through three directory levels,
-then paginated flat.
+`du` scans prefixes with up to 128 concurrent metadata-bearing listings. A prefix that
+exceeds one listing page is split at the next `/` through three directory levels, then
+paginated flat. Both object stores drive their own paging call, so a prefix with
+millions of objects directly below it arrives one page at a time rather than in a single
+response.
 
 Recursive `rm` on a remote prefix runs on that same parallel page scanner and deletes
 each page as it lands, rather than scanning the whole prefix first. Deletes start
@@ -102,10 +104,6 @@ admits roughly 1,000 writes per second before it returns 429, and deletes count 
 writes, so 60M objects need about 17 hours whatever the client does. At that scale an
 object lifecycle rule costs nothing and needs no listing. It is the better tool, and it
 is why throwaway data belongs under a `ttl=` prefix that a rule already covers.
-
-One case still lists serially: a GCS prefix whose objects sit directly under it, with no
-sub-prefixes to split across threads. gcsfs pages such a listing in one call, so the
-scanner cannot fan out. Nested layouts, and all S3 prefixes, parallelize.
 
 `usage` uses the same parallel metadata-page scanner as `du`, defaults to 128 workers,
 accepts up to 1,024 workers, and writes a Markdown report. Starting at the bucket root,
