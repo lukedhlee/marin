@@ -10,6 +10,7 @@ import pathlib
 import tempfile
 from contextlib import contextmanager
 from datetime import timedelta
+from unittest.mock import patch
 
 import equinox
 import equinox as eqx
@@ -157,6 +158,12 @@ def test_checkpointer_changing_policy():
         # ensure we saved the right checkpoints
         assert _get_checkpoint_steps(tmpdir) == [2, 4, 6, 8, 10, 15, 20, 30, 40]
 
+
+def test_checkpointer_config_sets_manager_timeout(tmp_path):
+    with patch("levanter.checkpoint.GlobalAsyncCheckpointManager") as manager:
+        CheckpointerConfig(base_path=str(tmp_path), timeout=timedelta(hours=2)).create("run")
+
+    manager.assert_called_once_with(timeout_secs=7200)
 
 def test_checkpointer_temporal_policy():
     fake_now = datetime.datetime(2021, 1, 1, 0, 0, 0)
