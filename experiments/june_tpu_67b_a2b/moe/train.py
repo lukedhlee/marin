@@ -494,7 +494,7 @@ def exit_if_hung(timeout: float | None):
         faulthandler.cancel_dump_traceback_later()
 
 
-def _run_grug_local(config: GrugRunConfig) -> None:
+def run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
     trainer.initialize()
@@ -718,7 +718,7 @@ def run_grug(config: GrugRunConfig) -> None:
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
-        local_entrypoint=_run_grug_local,
+        local_entrypoint=run_grug_local,
         resources=config.resources,
     )
 
@@ -730,4 +730,5 @@ __all__ = [
     "GrugTrainerConfig",
     "initial_state",
     "run_grug",
+    "run_grug_local",
 ]

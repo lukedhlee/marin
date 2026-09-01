@@ -51,7 +51,7 @@ from experiments.june_tpu_67b_a2b.moe.train import (
     GrugRunConfig,
     GrugTrainerConfig,
     _compute_flops,
-    _run_grug_local,
+    run_grug_local,
 )
 
 logger = logging.getLogger("june_synthetic_benchmark")
@@ -284,7 +284,7 @@ def main() -> None:
         args.watch_interval,
         flops_per_example,
     )
-    _run_grug_local(config)
+    run_grug_local(config)
     report_memory()
 
 
