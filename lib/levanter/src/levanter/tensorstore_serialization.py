@@ -819,7 +819,11 @@ def _serialize_arrays(
             try:
                 store = future.result()
                 target = store if region is None else store[region.index]
-                write = target.write(data, can_reference_source_data_indefinitely=True)
+                # A shard's ``data`` is an ephemeral staging buffer. Force TensorStore to copy it
+                # before ``write.copy`` resolves; otherwise large asynchronous encodes may outlive
+                # the Python array and observe allocator-reused memory. A host array's snapshot is
+                # a private copy TensorStore may keep referencing.
+                write = target.write(data, can_reference_source_data_indefinitely=region is None)
                 write.commit.add_done_callback(write_finished)
                 write.commit.force()
             except BaseException as error:
