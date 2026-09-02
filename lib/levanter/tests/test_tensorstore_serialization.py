@@ -30,9 +30,11 @@ from levanter.tensorstore_serialization import (
     TensorStoreReadConfig,
     TensorStoreWriteConfig,
     _capped_chunk_shape,
+    _shard_write_regions,
     _trim_host_memory_after_commits,
     _transfer_shard_to_pageable_host,
     build_kvstore_spec,
+    plan_array_write,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
@@ -70,6 +72,36 @@ def test_jemalloc_checkpoint_skips_glibc_trim_callback(monkeypatch):
     monkeypatch.delenv("LD_PRELOAD")
     _trim_host_memory_after_commits([future])
     assert len(callbacks) == 1
+
+
+def test_large_shard_is_staged_as_chunk_aligned_regions():
+    source = jnp.arange(8 * 8 * 8, dtype=jnp.float32).reshape(8, 8, 8)
+    config = TensorStoreWriteConfig(max_chunk_bytes=64, max_staged_host_bytes=128)
+    plan = plan_array_write("source", source, config)
+    shard = source.addressable_shards[0]
+
+    regions = _shard_write_regions(shard, plan)
+
+    assert len(regions) > 1
+    restored = np.zeros(source.shape, dtype=source.dtype)
+    local = np.asarray(shard.data)
+    for region in regions:
+        assert region.local_index is not None
+        staged = local[region.local_index]
+        assert staged.nbytes <= config.max_chunk_bytes
+        restored[region.index] = staged
+    np.testing.assert_array_equal(restored, np.asarray(source))
+
+
+def test_tensorstore_checkpoint_roundtrips_multi_axis_chunk_staging():
+    source = jnp.arange(8 * 8 * 8, dtype=jnp.float32).reshape(8, 8, 8)
+    config = TensorStoreWriteConfig(max_chunk_bytes=64, max_staged_host_bytes=128)
+
+    with TemporaryDirectory() as tmpdir:
+        tree_serialize_leaves_tensorstore(tmpdir, {"source": source}, write_config=config)
+        restored = tree_deserialize_leaves_tensorstore(tmpdir, {"source": jnp.zeros_like(source)})
+
+    np.testing.assert_array_equal(restored["source"], source)
 
 
 def test_tensorstore_checkpoint_simple():
@@ -215,7 +247,6 @@ def test_checkpoint_steps():
 
 def test_tensorstore_gpt2_mlp():
     with use_test_mesh():
-
         key0 = jax.random.PRNGKey(0)
         key1 = jax.random.PRNGKey(1)
 
