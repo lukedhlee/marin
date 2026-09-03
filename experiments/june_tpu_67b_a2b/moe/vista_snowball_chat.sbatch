@@ -54,7 +54,21 @@ export LD_PRELOAD="$(gcc -print-file-name=libstdc++.so.6)"
 # the default BFC allocator is what the passing one-GH200 canary (job 963973)
 # and the passing 8-host ring MoE probe (job 964442) actually ran on.
 export JAX_ENABLE_PGLE=false
-export XLA_FLAGS="--xla_gpu_enable_command_buffer= --xla_gpu_enable_latency_hiding_scheduler=true ${XLA_FLAGS:-}"
+# Latency hiding is deliberately NOT enabled here. The EP64 hero reference pairs
+# `--xla_gpu_enable_latency_hiding_scheduler=true` with
+# `--xla_gpu_experimental_parallel_collective_overlap_limit=4`, and that second
+# flag is a CAP on how many collectives overlap at once, not a throughput tweak.
+# Enabling the scheduler while dropping its cap -- as the first r7 attempt did --
+# lets XLA overlap an unbounded number of collectives, which on Vista all contend
+# for one IB port per host. Job 964523 cleared the 2-step smoke and the resume
+# gate but hung at step 2 of the 257-step production schedule, whose different
+# graph admits a different (deadlocking) overlap schedule.
+#
+# Correctness first: ship only the command buffer override, which is the flag
+# with direct evidence behind it. Set SNOWBALL_XLA_EXTRA to A/B the scheduler
+# without editing this file, e.g.
+#   SNOWBALL_XLA_EXTRA="--xla_gpu_enable_latency_hiding_scheduler=true --xla_gpu_experimental_parallel_collective_overlap_limit=2"
+export XLA_FLAGS="--xla_gpu_enable_command_buffer= ${SNOWBALL_XLA_EXTRA:-} ${XLA_FLAGS:-}"
 
 # Persist compiled executables and XLA autotune results so a restart inside the
 # allocation does not recompile the 64-device step, and so compile time is
