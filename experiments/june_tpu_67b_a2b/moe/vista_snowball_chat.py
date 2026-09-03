@@ -49,7 +49,13 @@ from experiments.june_tpu_67b_a2b.moe.snowball_chat_recipe import (
     SNOWBALL_CHAT_TOKENS,
     SNOWBALL_NATIVE_PARAMETERS,
 )
-from experiments.june_tpu_67b_a2b.moe.train import GrugRunConfig, GrugTrainerConfig, run_grug_local
+from experiments.june_tpu_67b_a2b.moe.train import (
+    GrugRunConfig,
+    GrugTrainerConfig,
+    apply_gpu_runtime_defaults,
+    arm_hang_traceback_dumper,
+    run_grug_local,
+)
 from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
 
 _MINIMUM_OUTPUT_FREE_BYTES = 1_000_000_000_000
@@ -569,7 +575,13 @@ def snowball_chat_run_config(
 
 @click.group()
 def main() -> None:
-    pass
+    """Vista Snowball chat entry point.
+
+    The runtime defaults are applied here, before any subcommand touches JAX, so
+    every path -- probes included -- gets the same GPU runtime contract.
+    """
+    apply_gpu_runtime_defaults()
+    arm_hang_traceback_dumper()
 
 
 @main.command("prepare-data")
