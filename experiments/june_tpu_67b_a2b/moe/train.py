@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import dataclasses
+import faulthandler
 import functools
 import logging
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -51,6 +53,56 @@ from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Trans
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+
+
+# This trainer was vendored from the June TPU 67B cooldown launcher, so it
+# carried none of the GPU runtime workarounds the Grug MoE GPU trainers need.
+# On a one-GPU-per-host GPU cluster every expert-axis collective crosses the
+# fabric, and XLA GPU command buffers capture those NCCL collectives into a CUDA
+# graph that hangs the first training step with no error while the GPUs stay
+# pinned at high SM utilization.
+# TODO(https://github.com/marin-community/marin/issues/5675): drop the command
+# buffer override once the CUDA graph failure is fixed.
+GPU_RUNTIME_ENV = {"JAX_ENABLE_PGLE": "false"}
+# Deliberately narrower than experiments/grug/moe_hero_ep, whose `cuda_async`
+# allocator and `parallel_collective_overlap_limit=4` are tuned for GB200 NVL72
+# workers holding four GPUs on intra-host NVLink.
+_XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
+XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+
+
+def apply_gpu_runtime_defaults() -> None:
+    """Apply the Grug MoE GPU runtime contract unless the caller overrode it.
+
+    Must run before JAX initializes its backend. The launcher exports the same
+    settings; this keeps them attached to the code for any other entry point.
+    """
+    for name, value in GPU_RUNTIME_ENV.items():
+        os.environ.setdefault(name, value)
+    xla_flags = os.environ.get("XLA_FLAGS", "").split()
+    explicit_names = {flag.partition("=")[0] for flag in xla_flags}
+    defaults = (*_XLA_FLAG_DEFAULTS, XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG)
+    xla_flags.extend(flag for flag in defaults if flag.partition("=")[0] not in explicit_names)
+    os.environ["XLA_FLAGS"] = " ".join(xla_flags)
+
+
+def arm_hang_traceback_dumper() -> None:
+    """Dump every thread's stack periodically so a silent hang self-documents.
+
+    ``PYTHONFAULTHANDLER`` only fires on a fatal signal, which a spinning
+    collective never raises. Set ``SNOWBALL_HANG_DUMP_SECONDS=0`` to disable.
+    """
+    raw = os.environ.get("SNOWBALL_HANG_DUMP_SECONDS", "0")
+    try:
+        seconds = float(raw)
+    except ValueError:
+        logger.warning("Ignoring non-numeric SNOWBALL_HANG_DUMP_SECONDS=%r", raw)
+        return
+    if seconds <= 0:
+        return
+    faulthandler.enable()
+    faulthandler.dump_traceback_later(seconds, repeat=True, exit=False)
+    logger.info("Armed hang traceback dumper every %.0fs", seconds)
 
 
 @dataclass(frozen=True)

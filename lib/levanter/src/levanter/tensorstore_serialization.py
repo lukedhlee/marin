@@ -110,7 +110,16 @@ def _slice_shard_on_device(data, index: tuple[slice, ...]):
 
     A training mesh rejects the single-device operand. Orbax does the same.
     """
-    shard_mesh = jax.sharding.Mesh(np.array(list(data.sharding.device_set)), ("shard",))
+    devices = list(data.sharding.device_set)
+    if len(devices) != 1:
+        raise ValueError(f"Expected a single-device shard, got {len(devices)} devices.")
+    device = devices[0]
+    # ``shard.data`` can retain the training array's AbstractMesh sharding even
+    # though it lives on one concrete device. Rebind that local buffer before
+    # entering the staging mesh so eager slicing does not compare two unrelated
+    # mesh contexts (Explicit training axes versus the Auto staging axis).
+    data = jax.device_put(data, jax.sharding.SingleDeviceSharding(device))
+    shard_mesh = jax.sharding.Mesh(np.array([device]), ("shard",))
     with jax.sharding.set_mesh(shard_mesh):
         starts = tuple(0 if entry.start is None else entry.start for entry in index)
         limits = tuple(size if entry.stop is None else entry.stop for entry, size in zip(index, data.shape))

@@ -3,7 +3,7 @@
 #SBATCH --nodes=64
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64
-#SBATCH --time=04:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --job-name=snowball-chat
 #SBATCH --exclude=c610-021,c611-011,c640-041,c611-041,c611-122,c637-082,c636-121,c635-101,c641-061,c611-051,c636-152,c608-042,c634-142,c641-012,c634-052,c621-102,c637-042,c638-101,c638-102,c638-112
 
@@ -35,13 +35,63 @@ export TRITON_CC="$(command -v gcc)"
 export CC="${TRITON_CC}"
 export CXX="$(command -v g++)"
 export LD_PRELOAD="$(gcc -print-file-name=libstdc++.so.6)"
-export NCCL_DEBUG=WARN
-export NCCL_TIMEOUT=1800
+# Vista is ONE GH200 per host, so every expert-axis collective crosses the
+# InfiniBand fabric. XLA GPU command buffers capture those NCCL collectives
+# into a CUDA graph, which hangs the first training step with no error and the
+# GPUs pinned at high SM utilization -- the signature in
+# https://github.com/marin-community/marin/issues/5675 and the observed stall in
+# jobs 963075 and 963707. Both proven Grug MoE GPU trainers
+# (experiments/grug/moe_hero_ep, experiments/grug/moe_hero_fsdp) disable command
+# buffers for exactly this reason.
+# TODO(https://github.com/marin-community/marin/issues/5675): drop the command
+# buffer override once the CUDA graph failure is fixed.
+#
+# Only the topology-independent parts of the EP64 hero runtime are adopted here.
+# That reference is GB200 NVL72 -- 16 workers with FOUR GPUs each -- so its
+# `cuda_async` allocator and `parallel_collective_overlap_limit=4` are tuned for
+# a 4-GPU intra-host NVLink domain. Vista has one GPU per host behind a single
+# IB port, where 4 concurrent overlapping collectives contend for one NIC, and
+# the default BFC allocator is what the passing one-GH200 canary (job 963973)
+# and the passing 8-host ring MoE probe (job 964442) actually ran on.
+export JAX_ENABLE_PGLE=false
+export XLA_FLAGS="--xla_gpu_enable_command_buffer= --xla_gpu_enable_latency_hiding_scheduler=true ${XLA_FLAGS:-}"
+
+# Persist compiled executables and XLA autotune results so a restart inside the
+# allocation does not recompile the 64-device step, and so compile time is
+# separable from execution time when diagnosing a stall.
+SNOWBALL_SCRATCH="${SCRATCH:-$(dirname "${MARIN_ROOT}")}"
+export SNOWBALL_JAX_CACHE="${SNOWBALL_JAX_CACHE:-${SNOWBALL_SCRATCH}/jax-cache/snowball-chat}"
+mkdir -p "${SNOWBALL_JAX_CACHE}"
+export JAX_COMPILATION_CACHE_DIR="${SNOWBALL_JAX_CACHE}"
+export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=1
+export JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES=0
+export JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES=xla_gpu_per_fusion_autotune_cache_dir
+
+# A silent hang is the failure mode this run keeps hitting, so make every rank
+# self-document instead of relying on an operator noticing dead output.
+export SNOWBALL_HANG_DUMP_SECONDS="${SNOWBALL_HANG_DUMP_SECONDS:-900}"
+
+# NCCL_DEBUG=WARN produced zero NCCL lines across a seven-hour hang. Keep INIT
+# and NET (COLL is far too noisy at 64 ranks) and send it to per-host files so
+# stdout stays readable.
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT,NET
+export SNOWBALL_NCCL_LOG_DIR="${SNOWBALL_NCCL_LOG_DIR:-${SNOWBALL_SCRATCH}/logs/nccl/${SLURM_JOB_ID:-manual}}"
+mkdir -p "${SNOWBALL_NCCL_LOG_DIR}"
+export NCCL_DEBUG_FILE="${SNOWBALL_NCCL_LOG_DIR}/nccl.%h.%p.log"
+# NCCL_TIMEOUT is not an NCCL variable (absent from libnccl.so.2), so the
+# previous NCCL_TIMEOUT=1800 bought no watchdog at all. Bound the collective
+# instead of letting it spin for the whole wall clock.
 export NCCL_IB_TIMEOUT=22
 export NCCL_IB_RETRY_CNT=13
-export FI_EFA_FORK_SAFE=1
-export FI_EFA_ENABLE_SHM_TRANSFER=0
-export FI_PROVIDER=efa
+# NCCL 2.28's optional symmetric window registration segfaults on all ranks
+# during the first cross-host MoE collective on Vista GH200s (job 964441, 8/8
+# ranks SIGSEGV right after "Symmetric VA size=96GB"). The ring backend uses
+# ordinary NCCL collectives and does not need the device-initiated window API.
+export NCCL_WIN_ENABLE=0
+# Vista's fabric is NVIDIA/Mellanox InfiniBand -- NCCL selects NET/IB/0/GDRDMA.
+# The previous FI_PROVIDER=efa / FI_EFA_* settings were AWS Elastic Fabric
+# Adapter knobs with no EFA device on this cluster.
 export PYTHONPATH="${MARIN_ROOT}:${MARIN_ROOT}/lib/levanter/src:${MARIN_ROOT}/lib/haliax/src:${MARIN_ROOT}/lib/marin/src:${MARIN_ROOT}/lib/rigging/src:${MARIN_ROOT}/lib/fray/src:${MARIN_ROOT}/lib/zephyr/src:${MARIN_ROOT}/lib/iris/src:${PYTHONPATH:-}"
 
 test -x "${MARIN_PYTHON}"
