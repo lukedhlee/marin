@@ -67,7 +67,10 @@ GPU_RUNTIME_ENV = {"JAX_ENABLE_PGLE": "false"}
 # Deliberately narrower than experiments/grug/moe_hero_ep, whose `cuda_async`
 # allocator and `parallel_collective_overlap_limit=4` are tuned for GB200 NVL72
 # workers holding four GPUs on intra-host NVLink.
-_XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
+# Latency hiding is intentionally absent: the hero reference pairs it with
+# parallel_collective_overlap_limit=4, and enabling the scheduler without that
+# cap let XLA overlap unbounded collectives over Vista's single IB port per host.
+_XLA_FLAG_DEFAULTS: tuple[str, ...] = ()
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 
 
