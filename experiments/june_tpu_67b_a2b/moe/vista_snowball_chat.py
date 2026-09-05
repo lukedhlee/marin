@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import dataclasses
 import glob
+import hashlib
+from collections.abc import Sequence
 import json
 import math
 import os
@@ -62,9 +64,11 @@ _MINIMUM_OUTPUT_FREE_BYTES = 1_000_000_000_000
 _MINIMUM_OUTPUT_FREE_INODES = 10_000
 
 
-def snowball_chat_format() -> ChatLmDatasetFormat:
+def snowball_chat_format(*, messages_field: str = "conversation") -> ChatLmDatasetFormat:
+    """Delphi V0 chat format. Chat keeps the default ``conversation`` field; the
+    Thinking dataset stores its turns under ``messages`` and passes that in."""
     return ChatLmDatasetFormat(
-        messages_field="conversation",
+        messages_field=messages_field,
         chat_template=DELPHI_V0_CHAT_TEMPLATE,
         mask_user_turns=True,
         pack=None,
@@ -76,21 +80,23 @@ def prepare_chat_cache(
     parquet_glob: str,
     cache_path: str,
     tokenizer_path: str,
+    messages_field: str = "conversation",
+    tags: tuple[str, ...] = ("wildchat_386k", "snowball_chat"),
 ) -> int:
-    """Tokenize and pack the pinned WildChat Parquet shards."""
+    """Tokenize and pack pinned Parquet shards with the Delphi V0 chat format."""
     from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize  # noqa: PLC0415
 
     paths = sorted(glob.glob(parquet_glob))
     if not paths:
-        raise FileNotFoundError(f"No WildChat Parquet shards matched {parquet_glob!r}.")
+        raise FileNotFoundError(f"No Parquet shards matched {parquet_glob!r}.")
     tokenize(
         TokenizeConfig(
             train_paths=paths,
             validation_paths=[],
             cache_path=cache_path,
             tokenizer=tokenizer_path,
-            tags=["wildchat_386k", "snowball_chat"],
-            format=snowball_chat_format(),
+            tags=list(tags),
+            format=snowball_chat_format(messages_field=messages_field),
             max_workers=len(paths),
             worker_resources=ResourceConfig(cpu=16, ram="64g", disk="20g"),
         )
@@ -132,16 +138,29 @@ def _json_object(path: Path) -> dict[str, object]:
     return value
 
 
-def validate_native_checkpoint_layout(init_checkpoint_path: str) -> tuple[str, int, int]:
-    """Resolve a complete Snowball step-0 checkpoint and measure its payload."""
+def validate_native_checkpoint_layout(
+    init_checkpoint_path: str, *, expect_step: int = 0
+) -> tuple[str, int, int]:
+    """Resolve a complete native checkpoint and measure its payload.
+
+    ``expect_step`` is EXACT and required. Chat passes 0 (the base cooldown
+    export); a chained stage passes the completed prior stage's final step. An
+    earlier version accepted "any step >= 1" for chained stages, which let a
+    step-3 smoke checkpoint pass the gate -- hence the exact match.
+    """
     if not Path(init_checkpoint_path).is_absolute():
         raise ValueError(f"Snowball init checkpoint path must be absolute: {init_checkpoint_path!r}.")
 
     resolved_path = latest_checkpoint_path(init_checkpoint_path)
     checkpoint_path = Path(resolved_path)
     metadata = _json_object(checkpoint_path / "metadata.json")
-    if metadata.get("step") != 0:
-        raise ValueError(f"Snowball base checkpoint must be step 0, got {metadata.get('step')!r} in {resolved_path}.")
+    actual_step = metadata.get("step")
+    if actual_step != expect_step:
+        raise ValueError(
+            f"Init checkpoint must report step {expect_step}, got {actual_step!r} in {resolved_path}. "
+            f"A chained stage must start from the COMPLETED prior stage; an intermediate or smoke "
+            f"checkpoint is not acceptable."
+        )
 
     manifest_path = checkpoint_path / "manifest.ocdbt"
     if not manifest_path.is_file():
@@ -166,8 +185,96 @@ def validate_native_checkpoint_layout(init_checkpoint_path: str) -> tuple[str, i
     return resolved_path, len(payload_files), payload_bytes
 
 
-def validate_chat_cache_layout(data_cache_path: str) -> tuple[int, int, int]:
-    """Validate the exact completed WildChat cache used by the Chat recipe."""
+PROVENANCE_FILENAME = "snowball_provenance.json"
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_cache_provenance(
+    *, cache_path: str, stage: str, dataset_id: str, dataset_revision: str,
+    shard_paths: Sequence[str], tokenizer_path: str,
+) -> dict:
+    """Record WHICH source produced a cache.
+
+    Token and example counts do not identify a revision: two different dataset
+    commits can produce identical counts. This sidecar records the dataset id and
+    full revision, a hash of every input shard, the tokenizer hash, and the
+    format identity, so preflight can prove provenance instead of inferring it.
+    """
+    spec = STAGES[stage]
+    fmt = snowball_chat_format(messages_field=spec.messages_field)
+    record = {
+        "stage": stage,
+        "dataset_id": dataset_id,
+        "dataset_revision": dataset_revision,
+        "shards": {Path(p).name: _sha256_file(Path(p)) for p in sorted(shard_paths)},
+        "tokenizer_sha256": _sha256_file(Path(tokenizer_path) / "tokenizer.json"),
+        "format": {
+            "messages_field": fmt.messages_field,
+            "mask_user_turns": bool(fmt.mask_user_turns),
+            "chat_template_sha256": hashlib.sha256(
+                (fmt.chat_template or "").encode("utf-8")
+            ).hexdigest(),
+        },
+    }
+    out = Path(cache_path) / PROVENANCE_FILENAME
+    out.write_text(json.dumps(record, indent=2, sort_keys=True))
+    return record
+
+
+def validate_cache_provenance(cache_path: str, stage: str, tokenizer_path: str) -> dict:
+    """Prove the cache came from this stage's pinned source."""
+    spec = STAGES[stage]
+    path = Path(cache_path) / PROVENANCE_FILENAME
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Cache at {cache_path} has no {PROVENANCE_FILENAME}; its source revision cannot be "
+            f"verified. Regenerate it with the write-provenance command."
+        )
+    rec = json.loads(path.read_text())
+    if rec.get("stage") != stage:
+        raise ValueError(f"Cache provenance says stage {rec.get('stage')!r}, expected {stage!r}.")
+    if rec.get("dataset_revision") != spec.dataset_revision:
+        raise ValueError(
+            f"Cache was built from dataset revision {rec.get('dataset_revision')!r}, "
+            f"but {stage} pins {spec.dataset_revision!r}."
+        )
+    tok_sha = _sha256_file(Path(tokenizer_path) / "tokenizer.json")
+    if rec.get("tokenizer_sha256") != tok_sha:
+        raise ValueError(
+            f"Cache was built with tokenizer {rec.get('tokenizer_sha256')!r}, "
+            f"but preflight was given {tok_sha!r}."
+        )
+    fmt = snowball_chat_format(messages_field=spec.messages_field)
+    want_fmt = {
+        "messages_field": fmt.messages_field,
+        "mask_user_turns": bool(fmt.mask_user_turns),
+        "chat_template_sha256": hashlib.sha256((fmt.chat_template or "").encode("utf-8")).hexdigest(),
+    }
+    if rec.get("format") != want_fmt:
+        raise ValueError(f"Cache format identity {rec.get('format')!r} does not match {want_fmt!r}.")
+    if not rec.get("shards"):
+        raise ValueError("Cache provenance records no input shard hashes.")
+    return rec
+
+
+def validate_chat_cache_layout(
+    data_cache_path: str, *, expect_tokens: int | None = SNOWBALL_CHAT_TOKENS,
+    expect_examples: int | None = SNOWBALL_CHAT_EXAMPLES,
+) -> tuple[int, int, int]:
+    """Validate a completed packed cache.
+
+    Chat pins the EXACT WildChat totals (defaults) so Stage 1 cannot drift. Other
+    stages pass ``None`` and are validated structurally instead -- ledger shape,
+    finished shards, and a non-empty token/example count -- because their totals
+    are a property of their own dataset, not of WildChat.
+    """
     cache_path = Path(data_cache_path)
     if not cache_path.is_absolute():
         raise ValueError(f"Snowball data cache path must be absolute: {data_cache_path!r}.")
@@ -176,11 +283,17 @@ def validate_chat_cache_layout(data_cache_path: str) -> tuple[int, int, int]:
     stats = _json_object(train_path / ".stats.json")
     total_tokens = stats.get("total_tokens")
     total_examples = stats.get("total_elements")
-    if total_tokens != SNOWBALL_CHAT_TOKENS or total_examples != SNOWBALL_CHAT_EXAMPLES:
-        raise ValueError(
-            f"Packed WildChat cache has {total_tokens!r} tokens and {total_examples!r} examples; expected "
-            f"{SNOWBALL_CHAT_TOKENS} tokens and {SNOWBALL_CHAT_EXAMPLES} examples."
-        )
+    if expect_tokens is not None or expect_examples is not None:
+        if total_tokens != expect_tokens or total_examples != expect_examples:
+            raise ValueError(
+                f"Packed cache has {total_tokens!r} tokens and {total_examples!r} examples; expected "
+                f"{expect_tokens} tokens and {expect_examples} examples."
+            )
+    else:
+        if not isinstance(total_tokens, int) or total_tokens < 1:
+            raise ValueError(f"Packed cache reports {total_tokens!r} tokens; refusing to train on an empty cache.")
+        if not isinstance(total_examples, int) or total_examples < 1:
+            raise ValueError(f"Packed cache reports {total_examples!r} examples; refusing to train on an empty cache.")
 
     ledger = _json_object(train_path / "shard_ledger.json")
     shard_rows = ledger.get("shard_rows")
@@ -196,10 +309,17 @@ def validate_chat_cache_layout(data_cache_path: str) -> tuple[int, int, int]:
     typed_shard_rows = {str(shard): int(rows) for shard, rows in shard_rows.items()}
     if ledger.get("is_finished") is not True or set(typed_finished_shards) != set(typed_shard_rows):
         raise ValueError(f"Packed WildChat cache is not fully committed at {train_path}.")
-    if sum(typed_shard_rows.values()) != SNOWBALL_CHAT_EXAMPLES:
-        raise ValueError(f"Packed WildChat cache shard rows do not sum to {SNOWBALL_CHAT_EXAMPLES}.")
-    if field_counts != {"assistant_masks": SNOWBALL_CHAT_TOKENS, "input_ids": SNOWBALL_CHAT_TOKENS}:
-        raise ValueError(f"Packed WildChat cache field counts are invalid: {field_counts!r}.")
+    # Cross-check the ledger against the cache's OWN totals. Comparing against
+    # Chat's constants here would reject every other dataset by construction.
+    if sum(typed_shard_rows.values()) != total_examples:
+        raise ValueError(
+            f"Packed cache shard rows sum to {sum(typed_shard_rows.values())}, "
+            f"but .stats.json reports {total_examples} examples."
+        )
+    if field_counts != {"assistant_masks": total_tokens, "input_ids": total_tokens}:
+        raise ValueError(
+            f"Packed cache field counts {field_counts!r} disagree with the reported {total_tokens} tokens."
+        )
 
     for shard in typed_finished_shards:
         shard_path = train_path / shard
@@ -213,7 +333,14 @@ def validate_chat_cache_layout(data_cache_path: str) -> tuple[int, int, int]:
             if not has_payload:
                 raise FileNotFoundError(f"Packed WildChat cache shard has no {field} payload: {shard_path}.")
 
-    return SNOWBALL_CHAT_TOKENS, SNOWBALL_CHAT_EXAMPLES, len(typed_finished_shards)
+    # Return what the cache ACTUALLY contains, not Chat's constants -- returning
+    # the latter would report WildChat totals for a Thinking cache.
+    return total_tokens, total_examples, len(typed_finished_shards)
+
+
+# sha256 of the pinned Snowball tokenizer. Every stage in the lineage must use the
+# identical tokenizer; a silent swap would corrupt the chained weights-only init.
+SNOWBALL_TOKENIZER_SHA256 = "881c9c36c359e1617afef6f7583403567931b7b4f43f6552d2b2155a131650a2"
 
 
 def _validate_tokenizer(tokenizer_path: str) -> int:
@@ -233,6 +360,12 @@ def _validate_tokenizer(tokenizer_path: str) -> int:
     token_ids = tokenizer.encode("Snowball launch preflight", add_special_tokens=False)
     if not token_ids or max(token_ids) >= vocab_size:
         raise ValueError(f"Snowball tokenizer produced invalid token IDs: {token_ids!r}.")
+    fingerprint = hashlib.sha256((Path(tokenizer_path) / "tokenizer.json").read_bytes()).hexdigest()
+    if fingerprint != SNOWBALL_TOKENIZER_SHA256:
+        raise ValueError(
+            f"Tokenizer fingerprint {fingerprint} does not match the pinned Snowball tokenizer "
+            f"{SNOWBALL_TOKENIZER_SHA256}. Every stage must share one tokenizer."
+        )
     return vocab_size
 
 
@@ -302,19 +435,37 @@ def preflight_snowball_chat(
     steps: int,
     devices: int,
     expected_output_checkpoint_step: int | None = None,
+    stage: str = "chat",
 ) -> SnowballChatPreflight:
     """Validate every static input before requesting a 64-node training allocation."""
+    if stage not in STAGE_DATA:
+        raise ValueError(f"Unknown stage {stage!r}; expected one of {sorted(STAGE_DATA)}.")
     if not run_id or "/" in run_id:
         raise ValueError(f"Snowball run ID must be a non-empty path-free name, got {run_id!r}.")
-    if steps < 1 or steps > SNOWBALL_CHAT_STEPS:
-        raise ValueError(f"Snowball steps must be between 1 and {SNOWBALL_CHAT_STEPS}, got {steps}.")
+    stage_max = STAGES[stage].max_steps
+    if stage_max is None:  # derive the ceiling from the cache this stage actually built
+        stage_max = derive_epoch_steps(read_chat_cache_tokens(data_cache_path))
+    if steps < 1 or steps > stage_max:
+        raise ValueError(f"Snowball {stage} steps must be between 1 and {stage_max}, got {steps}.")
     if expected_output_checkpoint_step is not None and steps <= expected_output_checkpoint_step:
         raise ValueError(
             f"Snowball resume target {steps} must exceed checkpoint step {expected_output_checkpoint_step}."
         )
 
-    resolved_init, payload_files, payload_bytes = validate_native_checkpoint_layout(init_checkpoint_path)
-    cache_tokens, cache_examples, cache_shards = validate_chat_cache_layout(data_cache_path)
+    resolved_init, payload_files, payload_bytes = validate_native_checkpoint_layout(
+        init_checkpoint_path, expect_step=STAGES[stage].init_step
+    )
+    _spec = STAGES[stage]
+    cache_tokens, cache_examples, cache_shards = validate_chat_cache_layout(
+        data_cache_path,
+        expect_tokens=_spec.cache_tokens,
+        expect_examples=_spec.cache_examples,
+    )
+    if cache_shards != _spec.cache_shards:
+        raise ValueError(
+            f"{stage} cache has {cache_shards} finished shards; expected {_spec.cache_shards}."
+        )
+    validate_cache_provenance(data_cache_path, stage, tokenizer_path)
     tokenizer_vocab_size = _validate_tokenizer(tokenizer_path)
 
     mesh_factor = SNOWBALL_CHAT_REPLICA_AXIS * SNOWBALL_CHAT_EXPERT_PARALLEL * SNOWBALL_CHAT_MODEL_AXIS
@@ -341,6 +492,7 @@ def preflight_snowball_chat(
         run_id=run_id,
         steps=steps,
         devices=devices,
+        stage=stage,
     )
     if run_config.trainer.trainer.initialize_from != resolved_init:
         raise ValueError(
@@ -364,24 +516,68 @@ def preflight_snowball_chat(
     )
 
 
-def snowball_chat_data_config(*, cache_path: str, tokenizer_path: str) -> LmDataConfig:
-    fmt = snowball_chat_format()
-    source = UrlDatasetSourceConfig(train_urls=[], cache_dir=cache_path, format=fmt, tags=["wildchat_386k"])
+@dataclasses.dataclass(frozen=True)
+class StageSpec:
+    """Everything that varies between SFT stages, in one place.
+
+    Anything hardcoded to a Chat-specific string is a latent Stage-2 bug: the
+    component key, its tags, the mixture weight key and the W&B tag all have to
+    move together or the run trains under a Chat identity.
+    """
+
+    messages_field: str
+    component: str
+    wandb_tag: str
+    max_steps: int | None      # None => derive from the built cache
+    init_step: int             # EXACT step the init checkpoint must report
+    cache_tokens: int          # exact packed-token count of this stage's cache
+    cache_examples: int        # exact packed-example count
+    cache_shards: int          # exact finished-shard count
+    dataset_revision: str      # pinned dataset commit this cache was built from
+
+
+STAGES: dict[str, StageSpec] = {
+    "chat": StageSpec(
+        "conversation", "wildchat_386k", "s1_chat", SNOWBALL_CHAT_STEPS,
+        init_step=0,
+        cache_tokens=SNOWBALL_CHAT_TOKENS,
+        cache_examples=SNOWBALL_CHAT_EXAMPLES,
+        cache_shards=4,
+        dataset_revision="46a5bb56fffd8c57c3ecc812e647990b1527c001",
+    ),
+    # Thinking chains from the COMPLETED Chat stage. init_step is exact: accepting
+    # "any step >= 1" let a step-3 smoke checkpoint pass the gate.
+    "thinking": StageSpec(
+        "messages", "nemotron_science_think", "s2_think", None,
+        init_step=SNOWBALL_CHAT_STEPS,
+        cache_tokens=1_321_080_491,
+        cache_examples=708_920,
+        cache_shards=15,
+        dataset_revision="bae881d7227146ef6b93fe830a1f613e96ea1338",
+    ),
+}
+STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
+
+
+def snowball_chat_data_config(*, cache_path: str, tokenizer_path: str, stage: str = "chat") -> LmDataConfig:
+    spec = STAGES[stage]
+    fmt = snowball_chat_format(messages_field=spec.messages_field)
+    source = UrlDatasetSourceConfig(train_urls=[], cache_dir=cache_path, format=fmt, tags=[spec.component])
     return LmDataConfig(
         tokenizer=tokenizer_path,
         chat_template=DELPHI_V0_CHAT_TEMPLATE,
         enforce_eos=True,
         auto_build_caches=False,
         components={
-            "wildchat_386k": DatasetComponent(
+            spec.component: DatasetComponent(
                 source=source,
                 cache_dir=cache_path,
                 format=fmt,
-                tags=["wildchat_386k"],
+                tags=[spec.component],
                 split="train",
             )
         },
-        train_weights={"wildchat_386k": 1.0},
+        train_weights={spec.component: 1.0},
         mixture_block_size=2048,
     )
 
@@ -391,12 +587,26 @@ def expected_chat_steps(total_tokens: int) -> int:
 
 
 def validate_chat_epoch(total_tokens: int) -> int:
+    """STAGE 1 ONLY. Enforce the pinned 257-step Chat contract.
+
+    Deliberately strict and deliberately not generalized: Stage 2 derives its own
+    epoch (``derive_epoch_steps``) so that widening Stage 2 can never weaken this
+    check. Any caller that is not the pinned WildChat cache must NOT use this.
+    """
     steps = expected_chat_steps(total_tokens)
     if steps != SNOWBALL_CHAT_STEPS:
         raise ValueError(
             f"Packed WildChat cache resolves to {steps} steps, but the pinned Snowball Chat contract requires "
             f"{SNOWBALL_CHAT_STEPS}."
         )
+    return steps
+
+
+def derive_epoch_steps(total_tokens: int) -> int:
+    """Epoch length for any stage, derived from the cache that was actually built."""
+    steps = expected_chat_steps(total_tokens)
+    if steps <= 0:
+        raise ValueError(f"Cache resolves to {steps} steps; refusing to train on an empty cache.")
     return steps
 
 
@@ -476,7 +686,7 @@ def run_gpu_kernel_probe() -> None:
     click.echo("SNOWBALL_GPU_KERNEL_PROBE_OK")
 
 
-def run_gpu_runtime_probe(*, data_cache_path: str, tokenizer_path: str) -> None:
+def run_gpu_runtime_probe(*, data_cache_path: str, tokenizer_path: str, stage: str = "chat") -> None:
     """Exercise the GPU kernels and the real CPU-sharded token-cache path."""
     import jax  # noqa: PLC0415
 
@@ -484,12 +694,13 @@ def run_gpu_runtime_probe(*, data_cache_path: str, tokenizer_path: str) -> None:
     datasets = snowball_chat_data_config(
         cache_path=data_cache_path,
         tokenizer_path=tokenizer_path,
+        stage=stage,
     ).train_sets(
         Axis("position", SNOWBALL_CHAT_SEQUENCE_LENGTH),
         key=jax.random.PRNGKey(SNOWBALL_CHAT_SEED),
         initial_batch_size=SNOWBALL_CHAT_BATCH_SIZE,
     )
-    example = datasets["wildchat_386k"].as_sync_dataset()[0]
+    example = datasets[STAGES[stage].component].as_sync_dataset()[0]
     tokens = np.asarray(example.tokens)
     loss_weight = np.asarray(example.loss_weight)
     expected_shape = (SNOWBALL_CHAT_SEQUENCE_LENGTH,)
@@ -515,13 +726,22 @@ def snowball_chat_run_config(
     run_id: str,
     steps: int,
     devices: int,
+    stage: str = "chat",
 ) -> GrugRunConfig:
+    if stage not in STAGE_DATA:
+        raise ValueError(f"Unknown stage {stage!r}; expected one of {sorted(STAGE_DATA)}.")
     if devices != SNOWBALL_CHAT_DEVICES:
         raise ValueError(f"Snowball Chat requires {SNOWBALL_CHAT_DEVICES} devices, got {devices}.")
     total_tokens = read_chat_cache_tokens(data_cache_path)
-    full_epoch_steps = validate_chat_epoch(total_tokens)
+    # Stage 1 keeps its strict 257-step assertion; every other stage derives.
+    if stage == "chat":
+        full_epoch_steps = validate_chat_epoch(total_tokens)
+    else:
+        full_epoch_steps = derive_epoch_steps(total_tokens)
     if steps > full_epoch_steps:
-        raise ValueError(f"Requested {steps} steps, but the packed WildChat epoch has only {full_epoch_steps} steps.")
+        raise ValueError(
+            f"Requested {steps} steps, but the packed {stage} epoch has only {full_epoch_steps} steps."
+        )
 
     run_resources = ResourceConfig.with_gpu("GH200", count=1, replicas=devices)
     trainer = TrainerConfig(
@@ -535,7 +755,7 @@ def snowball_chat_run_config(
             project="marin_moe_sft",
             name=run_id,
             group="grug-67b-a2b-sft",
-            tags=["moe", "67b_a2b", "sft", "s1_chat", "seq32768", "vista-gh200"],
+            tags=["moe", "67b_a2b", "sft", STAGES[stage].wandb_tag, "seq32768", "vista-gh200"],
             mode="offline",
         ),
         use_explicit_mesh_axes=True,
@@ -556,7 +776,7 @@ def snowball_chat_run_config(
     )
     return GrugRunConfig(
         model=dataclasses.replace(SNOWBALL_CHAT_MODEL_CONFIG, max_seq_len=SNOWBALL_CHAT_SEQUENCE_LENGTH),
-        data=snowball_chat_data_config(cache_path=data_cache_path, tokenizer_path=tokenizer_path),
+        data=snowball_chat_data_config(cache_path=data_cache_path, tokenizer_path=tokenizer_path, stage=stage),
         resources=run_resources,
         optimizer=SNOWBALL_CHAT_OPTIMIZER,
         trainer=GrugTrainerConfig(
@@ -588,15 +808,51 @@ def main() -> None:
 @click.option("--parquet-glob", required=True)
 @click.option("--cache-path", required=True)
 @click.option("--tokenizer-path", required=True)
-def prepare_data_command(parquet_glob: str, cache_path: str, tokenizer_path: str) -> None:
+@click.option("--messages-field", default="conversation", show_default=True,
+              help="Turns column. Chat uses 'conversation'; the Thinking set uses 'messages'.")
+@click.option("--tags", default="wildchat_386k,snowball_chat", show_default=True)
+@click.option("--expect-steps", type=int, default=None,
+              help="Assert the derived epoch length. Omit to DERIVE and report only, "
+                   "which is required for any dataset other than the pinned Chat cache.")
+def prepare_data_command(parquet_glob: str, cache_path: str, tokenizer_path: str,
+                         messages_field: str, tags: str, expect_steps: int | None) -> None:
     total_tokens = prepare_chat_cache(
         parquet_glob=parquet_glob,
         cache_path=cache_path,
         tokenizer_path=tokenizer_path,
+        messages_field=messages_field,
+        tags=tuple(t for t in tags.split(",") if t),
     )
+    # Always DERIVE from the completed cache. Only assert when the caller states
+    # an expectation -- validate_chat_epoch hardcodes the 257-step Chat contract
+    # and would reject any other dataset by construction.
+    steps = expected_chat_steps(total_tokens)
     click.echo(f"total_tokens={total_tokens}")
-    click.echo(f"full_epoch_steps={validate_chat_epoch(total_tokens)}")
+    click.echo(f"full_epoch_steps={steps}")
+    if expect_steps is not None and steps != expect_steps:
+        raise SystemExit(f"FATAL: cache resolves to {steps} steps, expected {expect_steps}.")
     click.echo("SNOWBALL_CHAT_CACHE_OK")
+
+
+@main.command("write-provenance")
+@click.option("--cache-path", required=True)
+@click.option("--stage", type=click.Choice(sorted(STAGES)), required=True)
+@click.option("--dataset-id", required=True)
+@click.option("--dataset-revision", required=True)
+@click.option("--parquet-glob", required=True)
+@click.option("--tokenizer-path", required=True)
+def write_provenance_command(cache_path, stage, dataset_id, dataset_revision, parquet_glob, tokenizer_path):
+    """Record which pinned source produced an already-built cache."""
+    shards = sorted(glob.glob(parquet_glob))
+    if not shards:
+        raise SystemExit(f"FATAL: no shards matched {parquet_glob!r}")
+    rec = write_cache_provenance(
+        cache_path=cache_path, stage=stage, dataset_id=dataset_id,
+        dataset_revision=dataset_revision, shard_paths=shards, tokenizer_path=tokenizer_path,
+    )
+    click.echo(f"shards_hashed={len(rec['shards'])}")
+    click.echo(f"dataset_revision={rec['dataset_revision']}")
+    click.echo("SNOWBALL_PROVENANCE_OK")
 
 
 @main.command("distributed-probe")
@@ -626,6 +882,8 @@ def gpu_runtime_probe_command(data_cache_path: str, tokenizer_path: str) -> None
 @click.option("--steps", type=click.IntRange(min=1), default=SNOWBALL_CHAT_STEPS, show_default=True)
 @click.option("--devices", type=click.IntRange(min=1), default=SNOWBALL_CHAT_DEVICES, show_default=True)
 @click.option("--expected-output-checkpoint-step", type=click.IntRange(min=0))
+@click.option("--stage", type=click.Choice(sorted(STAGE_DATA)), default="chat", show_default=True,
+              help="Selects turns field, dataset tag, and whether the strict Chat epoch contract applies.")
 def preflight_command(
     init_checkpoint_path: str,
     data_cache_path: str,
@@ -635,6 +893,7 @@ def preflight_command(
     steps: int,
     devices: int,
     expected_output_checkpoint_step: int | None,
+    stage: str,
 ) -> None:
     report = preflight_snowball_chat(
         init_checkpoint_path=init_checkpoint_path,
@@ -645,6 +904,7 @@ def preflight_command(
         steps=steps,
         devices=devices,
         expected_output_checkpoint_step=expected_output_checkpoint_step,
+        stage=stage,
     )
     click.echo(json.dumps(dataclasses.asdict(report), sort_keys=True))
     click.echo("SNOWBALL_CHAT_PREFLIGHT_OK")
@@ -659,6 +919,8 @@ def preflight_command(
 @click.option("--steps", type=click.IntRange(min=1), default=SNOWBALL_CHAT_STEPS, show_default=True)
 @click.option("--devices", type=click.IntRange(min=1), default=SNOWBALL_CHAT_DEVICES, show_default=True)
 @click.option("--expected-output-checkpoint-step", type=click.IntRange(min=0))
+@click.option("--stage", type=click.Choice(sorted(STAGE_DATA)), default="chat", show_default=True,
+              help="Selects turns field, dataset tag, and whether the strict Chat epoch contract applies.")
 def train_command(
     init_checkpoint_path: str,
     data_cache_path: str,
@@ -668,6 +930,7 @@ def train_command(
     steps: int,
     devices: int,
     expected_output_checkpoint_step: int | None,
+    stage: str,
 ) -> None:
     preflight_snowball_chat(
         init_checkpoint_path=init_checkpoint_path,
@@ -678,6 +941,7 @@ def train_command(
         steps=steps,
         devices=devices,
         expected_output_checkpoint_step=expected_output_checkpoint_step,
+        stage=stage,
     )
     run_config = snowball_chat_run_config(
         init_checkpoint_path=init_checkpoint_path,
@@ -687,6 +951,7 @@ def train_command(
         run_id=run_id,
         steps=steps,
         devices=devices,
+        stage=stage,
     )
     run_grug_local(run_config)
 
