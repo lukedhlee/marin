@@ -1,5 +1,6 @@
 import dataclasses
 import math
+import os
 from typing import Any, cast
 
 import draccus
@@ -17,15 +18,30 @@ from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as VendoredGr
 from experiments.june_tpu_67b_a2b.moe.model import Transformer as VendoredTransformer
 from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 
-CHECKPOINT = (
+# Env overrides exist only so this can run on a filesystem/topology other than
+# the reference CoreWeave one. Unset, every value is the #8225 reference, so the
+# original behaviour is preserved byte for byte -- including the chat template
+# metadata, which the reference writes as MARIN_CHAT_TEMPLATE and overrides with
+# Delphi V0 at serve/eval time.
+CHECKPOINT = os.environ.get(
+    "SNOWBALL_EXPORT_CHECKPOINT",
     "s3://marin-us-east-02a/marin/grug/"
     "snowball_step105149_sft_s2_thinking/"
-    "2026.08.13.1/checkpoints/step-630/"
+    "2026.08.13.1/checkpoints/step-630/",
 )
-OUTPUT = (
+OUTPUT = os.environ.get(
+    "SNOWBALL_EXPORT_OUTPUT",
     "s3://marin-us-east-02a/marin/exports/grug/"
-    "snowball_step105149_sft_s2_thinking/2026.08.13.1/step-630/hf-bf16-vllm/"
+    "snowball_step105149_sft_s2_thinking/2026.08.13.1/step-630/hf-bf16-vllm/",
 )
+# marin-community/marin-tokenizer is byte-identical to the pinned Snowball
+# tokenizer (sha256 881c9c36...), verified on Vista; a local path avoids needing
+# the network from a compute node.
+TOKENIZER = os.environ.get("SNOWBALL_EXPORT_TOKENIZER", "marin-community/marin-tokenizer")
+# One GPU per host means the params cannot be replicated: 134 GB bf16 exceeds a
+# 120 GB GH200. Shard over an explicit expert axis instead.
+EXPERT_AXIS = int(os.environ.get("SNOWBALL_EXPORT_EXPERT_AXIS", "1"))
+REPLICA_AXIS = os.environ.get("SNOWBALL_EXPORT_REPLICA_AXIS")
 
 qk_mult = 1.3 * (0.1 * math.log(65_536 / 8_192) + 1.0)
 model_config = dataclasses.replace(
@@ -44,7 +60,25 @@ vendored_config = draccus.decode(VendoredGrugModelConfig, model_dict)
 main_fields = {field.name for field in dataclasses.fields(GrugModelConfig)}
 main_config = draccus.decode(GrugModelConfig, {key: value for key, value in model_dict.items() if key in main_fields})
 
-mesh = compact_grug_mesh()
+# The reference runs under Fray/Iris, which initialises JAX distributed for it.
+# Under bare srun each task sees only its own GPU (global_device_count == 1) and
+# the expert mesh cannot be built. Initialise from Slurm when running multi-task;
+# a single-process run is left exactly as the reference behaves.
+if int(os.environ.get("SLURM_NTASKS", "1")) > 1:
+    from levanter.distributed import DistributedConfig
+
+    DistributedConfig().initialize()
+    print(f"EXPORT distributed: {jax.process_count()} processes, "
+          f"{jax.device_count()} global devices", flush=True)
+
+mesh = compact_grug_mesh(
+    expert_axis_size=EXPERT_AXIS,
+    replica_axis_size=int(REPLICA_AXIS) if REPLICA_AXIS else None,
+)
+_rep = REPLICA_AXIS or "<processes>"
+print(f"EXPORT mesh expert_axis={EXPERT_AXIS} replica_axis={_rep}", flush=True)
+print(f"EXPORT checkpoint={CHECKPOINT}", flush=True)
+print(f"EXPORT output={OUTPUT}", flush=True)
 with set_mesh(mesh):
     template = eqx.filter_eval_shape(VendoredTransformer.init, vendored_config, key=jax.random.PRNGKey(0))
     state = load_checkpoint(
@@ -82,7 +116,7 @@ with set_mesh(mesh):
         final_gated_norm=source.final_gated_norm,
         config=main_config,
     )
-    tokenizer = load_tokenizer("marin-community/marin-tokenizer")
+    tokenizer = load_tokenizer(TOKENIZER)
     converter = main_config.hf_checkpoint_converter().replaced(tokenizer=tokenizer).with_config_overrides({"dtype": "bfloat16"})
     converter.save_pretrained(
         export_model,
@@ -95,3 +129,4 @@ with set_mesh(mesh):
         },
         chat_template=MARIN_CHAT_TEMPLATE,
     )
+print("SNOWBALL_EXPORT_OK", flush=True)
