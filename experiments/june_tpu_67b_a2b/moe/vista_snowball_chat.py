@@ -264,11 +264,29 @@ def write_cache_provenance(
     """
     spec = STAGES[stage]
     fmt = snowball_chat_format(messages_field=spec.messages_field, chat_template=spec.chat_template)
+    # Key each shard by its path relative to the shards' common root, NOT by
+    # basename. The Nemotron Terminal selection holds 26 files all named
+    # data_filtered.parquet in different directories; a basename key collapses
+    # them to ONE entry, so a 29-shard build recorded 4 hashes and silently
+    # discarded 25. Relative paths also match the upstream pinned-list format,
+    # making the sidecar directly comparable to it.
+    shard_list = sorted(shard_paths)
+    if not shard_list:
+        raise ValueError("write_cache_provenance requires at least one shard path.")
+    parents = [str(Path(p).parent) for p in shard_list]
+    root = os.path.commonpath(parents) if len(set(parents)) > 1 else parents[0]
+    shards = {os.path.relpath(p, root): _sha256_file(Path(p)) for p in shard_list}
+    if len(shards) != len(shard_list):
+        raise ValueError(
+            f"Shard key collision: {len(shard_list)} input shards produced only "
+            f"{len(shards)} provenance keys, so hashes would be silently discarded."
+        )
     record = {
         "stage": stage,
         "dataset_id": dataset_id,
         "dataset_revision": dataset_revision,
-        "shards": {Path(p).name: _sha256_file(Path(p)) for p in sorted(shard_paths)},
+        "shard_root": root,
+        "shards": shards,
         "tokenizer_sha256": _sha256_file(Path(tokenizer_path) / "tokenizer.json"),
         "format": {
             "messages_field": fmt.messages_field,
@@ -635,9 +653,9 @@ STAGES: dict[str, StageSpec] = {
     "nemotron_terminal": StageSpec(
         "conversations", "nemotron_terminal_full", "s3_nemotron_terminal", None,
         init_step=630,
-        cache_tokens=0,
-        cache_examples=0,
-        cache_shards=0,
+        cache_tokens=6075088769,
+        cache_examples=366154,
+        cache_shards=19,
         dataset_revision="a1667c4ffdadea02a89bffe4f1bb7ca2ff19f8d9",
         source_files=29,
         chat_template=MARIN_CHAT_TEMPLATE,
