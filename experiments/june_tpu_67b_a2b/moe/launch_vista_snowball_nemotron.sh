@@ -79,7 +79,12 @@ PLAN
 [ "${DRY_RUN:-0}" = "1" ] && { echo "DRY_RUN=1 -- not submitting."; exit 0; }
 [ -e "$OUT" ] && { echo "FATAL: $OUT exists; refusing to reuse an output path" >&2; exit 2; }
 
+# The shared guarded sbatch asks for 48h. Stage 2 ran 630 steps in 1:15:11, so
+# 1,888 steps is ~3.3-3.8h; a 48h request needs a 48h backfill gap on a queue
+# 200+ deep. Override to a wall that still leaves generous headroom.
+WALL=${SNOWBALL_WALL:-06:00:00}
 sbatch -o $S/logs/snowball-nemotron.%j.log \
+  -t "$WALL" \
   -J snowball-nemotron-s3 \
   --export=ALL,MARIN_ROOT=$S/marin,MARIN_PYTHON=$PYBIN,\
 SNOWBALL_INIT="$INIT",\
