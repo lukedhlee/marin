@@ -13,7 +13,7 @@
 # two-step smoke stage at production geometry inside the 64-node chain.
 set -euo pipefail
 
-S=/scratch/11694/mkumar73
+S=${SCRATCH:?}
 
 sbatch \
   -J snowball-env-gate \

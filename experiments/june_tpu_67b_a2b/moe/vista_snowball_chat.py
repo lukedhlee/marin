@@ -13,11 +13,11 @@ from __future__ import annotations
 import dataclasses
 import glob
 import hashlib
-from collections.abc import Sequence
 import json
 import math
 import os
 import shutil
+from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
 
@@ -35,6 +35,7 @@ from levanter.utils.mesh import MeshConfig
 from rigging.filesystem import prefix_join
 from transformers import AutoTokenizer
 
+from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeAdamHConfig
 from experiments.june_tpu_67b_a2b.moe.snowball_chat_recipe import (
     SNOWBALL_CHAT_BATCH_SIZE,
     SNOWBALL_CHAT_DEVICES,
@@ -107,18 +108,13 @@ def resolve_source_shards(
             raise SystemExit(f"FATAL: {parquet_list!r} lists no shards.")
         missing = [p for p in paths if not Path(p).is_file()]
         if missing:
-            raise SystemExit(
-                f"FATAL: {len(missing)} of {len(paths)} listed shards do not exist, "
-                f"e.g. {missing[0]!r}."
-            )
+            raise SystemExit(f"FATAL: {len(missing)} of {len(paths)} listed shards do not exist, e.g. {missing[0]!r}.")
     else:
         paths = sorted(glob.glob(parquet_glob, recursive=True))
         if not paths:
             raise FileNotFoundError(f"No Parquet shards matched {parquet_glob!r}.")
     if expect_files is not None and len(paths) != expect_files:
-        raise SystemExit(
-            f"FATAL: resolved {len(paths)} source shards, expected {expect_files}."
-        )
+        raise SystemExit(f"FATAL: resolved {len(paths)} source shards, expected {expect_files}.")
     return paths
 
 
@@ -136,9 +132,7 @@ def prepare_chat_cache(
     """Tokenize and pack pinned Parquet shards with the Delphi V0 chat format."""
     from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize  # noqa: PLC0415
 
-    paths = resolve_source_shards(
-        parquet_glob=parquet_glob, parquet_list=parquet_list, expect_files=expect_files
-    )
+    paths = resolve_source_shards(parquet_glob=parquet_glob, parquet_list=parquet_list, expect_files=expect_files)
     # Log every resolved shard. 983290 was only caught by reading zephyr reader
     # lines; the resolution step itself left no auditable record.
     print(f"resolved_source_shards={len(paths)}", flush=True)
@@ -193,9 +187,7 @@ def _json_object(path: Path) -> dict[str, object]:
     return value
 
 
-def validate_native_checkpoint_layout(
-    init_checkpoint_path: str, *, expect_step: int = 0
-) -> tuple[str, int, int]:
+def validate_native_checkpoint_layout(init_checkpoint_path: str, *, expect_step: int = 0) -> tuple[str, int, int]:
     """Resolve a complete native checkpoint and measure its payload.
 
     ``expect_step`` is EXACT and required. Chat passes 0 (the base cooldown
@@ -252,8 +244,13 @@ def _sha256_file(path: Path) -> str:
 
 
 def write_cache_provenance(
-    *, cache_path: str, stage: str, dataset_id: str, dataset_revision: str,
-    shard_paths: Sequence[str], tokenizer_path: str,
+    *,
+    cache_path: str,
+    stage: str,
+    dataset_id: str,
+    dataset_revision: str,
+    shard_paths: Sequence[str],
+    tokenizer_path: str,
 ) -> dict:
     """Record WHICH source produced a cache.
 
@@ -291,9 +288,7 @@ def write_cache_provenance(
         "format": {
             "messages_field": fmt.messages_field,
             "mask_user_turns": bool(fmt.mask_user_turns),
-            "chat_template_sha256": hashlib.sha256(
-                (fmt.chat_template or "").encode("utf-8")
-            ).hexdigest(),
+            "chat_template_sha256": hashlib.sha256((fmt.chat_template or "").encode("utf-8")).hexdigest(),
         },
     }
     out = Path(cache_path) / PROVENANCE_FILENAME
@@ -321,8 +316,7 @@ def validate_cache_provenance(cache_path: str, stage: str, tokenizer_path: str) 
     tok_sha = _sha256_file(Path(tokenizer_path) / "tokenizer.json")
     if rec.get("tokenizer_sha256") != tok_sha:
         raise ValueError(
-            f"Cache was built with tokenizer {rec.get('tokenizer_sha256')!r}, "
-            f"but preflight was given {tok_sha!r}."
+            f"Cache was built with tokenizer {rec.get('tokenizer_sha256')!r}, but preflight was given {tok_sha!r}."
         )
     fmt = snowball_chat_format(messages_field=spec.messages_field, chat_template=spec.chat_template)
     want_fmt = {
@@ -346,7 +340,9 @@ def validate_cache_provenance(cache_path: str, stage: str, tokenizer_path: str) 
 
 
 def validate_chat_cache_layout(
-    data_cache_path: str, *, expect_tokens: int | None = SNOWBALL_CHAT_TOKENS,
+    data_cache_path: str,
+    *,
+    expect_tokens: int | None = SNOWBALL_CHAT_TOKENS,
     expect_examples: int | None = SNOWBALL_CHAT_EXAMPLES,
 ) -> tuple[int, int, int]:
     """Validate a completed packed cache.
@@ -398,9 +394,7 @@ def validate_chat_cache_layout(
             f"but .stats.json reports {total_examples} examples."
         )
     if field_counts != {"assistant_masks": total_tokens, "input_ids": total_tokens}:
-        raise ValueError(
-            f"Packed cache field counts {field_counts!r} disagree with the reported {total_tokens} tokens."
-        )
+        raise ValueError(f"Packed cache field counts {field_counts!r} disagree with the reported {total_tokens} tokens.")
 
     for shard in typed_finished_shards:
         shard_path = train_path / shard
@@ -543,9 +537,7 @@ def preflight_snowball_chat(
         expect_examples=_spec.cache_examples,
     )
     if cache_shards != _spec.cache_shards:
-        raise ValueError(
-            f"{stage} cache has {cache_shards} finished shards; expected {_spec.cache_shards}."
-        )
+        raise ValueError(f"{stage} cache has {cache_shards} finished shards; expected {_spec.cache_shards}.")
     validate_cache_provenance(data_cache_path, stage, tokenizer_path)
     tokenizer_vocab_size = _validate_tokenizer(tokenizer_path)
 
@@ -609,20 +601,30 @@ class StageSpec:
     messages_field: str
     component: str
     wandb_tag: str
-    max_steps: int | None      # None => derive from the built cache
-    init_step: int             # EXACT step the init checkpoint must report
-    cache_tokens: int          # exact packed-token count of this stage's cache
-    cache_examples: int        # exact packed-example count
-    cache_shards: int          # exact finished-shard count
-    dataset_revision: str      # pinned dataset commit this cache was built from
-    chat_template: str         # Delphi V0 for chat/thinking; Marin for nemotron_terminal
-    fixed_steps: int | None    # a stage with a mandated budget (1888) rather than an epoch
-    source_files: int          # exact number of pinned INPUT shards the cache must be built from
+    max_steps: int | None  # None => derive from the built cache; set => the step ceiling (multi-epoch)
+    init_step: int  # EXACT step the init checkpoint must report
+    cache_tokens: int | None  # exact packed-token count of this stage's cache; None => structural check only
+    cache_examples: int | None  # exact packed-example count; None => structural check only
+    cache_shards: int  # exact finished-shard count
+    dataset_revision: str  # pinned dataset commit this cache was built from
+    chat_template: str  # Delphi V0 for chat/thinking; Marin for nemotron_terminal
+    fixed_steps: int | None  # a stage with a mandated budget (1888) rather than an epoch
+    source_files: int  # exact number of pinned INPUT shards the cache must be built from
+    # Per-stage optimizer. None keeps the Chat/Thinking AdamH at 5e-5 for the stages that trained
+    # with it; the agentic stages use Ben's Stage-3 setting (marin #8225, PR #8172): both groups 5e-6.
+    optimizer: GrugMoeAdamHConfig | None = None
+
+
+# Ben's Stage-3 / agentic optimizer: the Chat AdamH config with both learning rates at 5e-6.
+SNOWBALL_AGENTIC_OPTIMIZER = dataclasses.replace(SNOWBALL_CHAT_OPTIMIZER, learning_rate=5e-6, adam_lr=5e-6)
 
 
 STAGES: dict[str, StageSpec] = {
     "chat": StageSpec(
-        "conversation", "wildchat_386k", "s1_chat", SNOWBALL_CHAT_STEPS,
+        "conversation",
+        "wildchat_386k",
+        "s1_chat",
+        SNOWBALL_CHAT_STEPS,
         init_step=0,
         cache_tokens=SNOWBALL_CHAT_TOKENS,
         cache_examples=SNOWBALL_CHAT_EXAMPLES,
@@ -635,7 +637,10 @@ STAGES: dict[str, StageSpec] = {
     # Thinking chains from the COMPLETED Chat stage. init_step is exact: accepting
     # "any step >= 1" let a step-3 smoke checkpoint pass the gate.
     "thinking": StageSpec(
-        "messages", "nemotron_science_think", "s2_think", None,
+        "messages",
+        "nemotron_science_think",
+        "s2_think",
+        None,
         init_step=SNOWBALL_CHAT_STEPS,
         cache_tokens=1_321_080_491,
         cache_examples=708_920,
@@ -651,7 +656,10 @@ STAGES: dict[str, StageSpec] = {
     # derived epoch. Chains weights-only from the completed Thinking checkpoint.
     # cache_* are filled in once the cache is built and measured.
     "nemotron_terminal": StageSpec(
-        "conversations", "nemotron_terminal_full", "s3_nemotron_terminal", None,
+        "conversations",
+        "nemotron_terminal_full",
+        "s3_nemotron_terminal",
+        None,
         init_step=630,
         cache_tokens=6075088769,
         cache_examples=366154,
@@ -660,6 +668,32 @@ STAGES: dict[str, StageSpec] = {
         source_files=29,
         chat_template=MARIN_CHAT_TEMPLATE,
         fixed_steps=1888,
+    ),
+    # R2E-Gym teacher-trace SFT of the PRE-RL Snowball checkpoint (Stage 3 as published,
+    # laion/snowball-67b-a2b-sft-s3-nemotron-terminal-step1888, imported to native with
+    # import_snowball_hf -> a step-0 init, hence init_step=0). Same turns column and Marin template
+    # as nemotron_terminal (train == serve: the template is byte-identical to the export's
+    # chat_template.jinja), Ben's agentic optimizer, and a multi-epoch ceiling: the cache is one
+    # pinned parquet of 2,576 verifier-solved GLM-4.7 Terminus-2 traces (~53M tokens, ~26 packed
+    # steps per epoch; census 2026-09-15), so the launcher passes epochs x derived epoch steps and
+    # max_steps caps that at five epochs. cache_tokens/examples are validated structurally: the
+    # exact totals are recorded by write-provenance, not pinned here.
+    "r2egym": StageSpec(
+        "conversations",
+        "r2egym_glm47_solved_v1",
+        "s4_r2egym",
+        130,
+        init_step=0,
+        cache_tokens=None,
+        cache_examples=None,
+        cache_shards=1,
+        # DCAgent/g1_clean_hybrid_scaffold_plus_r2eg_gfi_38k_glm47_traces, filtered to R2E-Gym rows
+        # off the v2 idval/oodval/heldout tasks, result >= 1.0, <= 32,768 Marin tokens.
+        dataset_revision="4243a8f5cd39799803a6a0d52457fa0833068566",
+        source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        fixed_steps=None,
+        optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
 }
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
@@ -844,9 +878,13 @@ def snowball_chat_run_config(
         full_epoch_steps = validate_chat_epoch(total_tokens)
     else:
         full_epoch_steps = derive_epoch_steps(total_tokens)
-    if steps > full_epoch_steps:
+    # A stage that declares max_steps may train past one packed epoch (the mixture restarts
+    # exhausted components); every other stage keeps the one-epoch ceiling.
+    step_ceiling = STAGES[stage].max_steps or full_epoch_steps
+    if steps > step_ceiling:
         raise ValueError(
-            f"Requested {steps} steps, but the packed {stage} epoch has only {full_epoch_steps} steps."
+            f"Requested {steps} steps, but the packed {stage} epoch has only {full_epoch_steps} steps "
+            f"and the stage ceiling is {step_ceiling}."
         )
 
     run_resources = ResourceConfig.with_gpu("GH200", count=1, replicas=devices)
@@ -884,7 +922,7 @@ def snowball_chat_run_config(
         model=dataclasses.replace(SNOWBALL_CHAT_MODEL_CONFIG, max_seq_len=SNOWBALL_CHAT_SEQUENCE_LENGTH),
         data=snowball_chat_data_config(cache_path=data_cache_path, tokenizer_path=tokenizer_path, stage=stage),
         resources=run_resources,
-        optimizer=SNOWBALL_CHAT_OPTIMIZER,
+        optimizer=STAGES[stage].optimizer or SNOWBALL_CHAT_OPTIMIZER,
         trainer=GrugTrainerConfig(
             trainer=trainer,
             z_loss_weight=1e-4,
@@ -911,28 +949,43 @@ def main() -> None:
 
 
 @main.command("prepare-data")
-@click.option("--parquet-glob", default=None,
-              help="Shard pattern, expanded with recursive=True. Prefer --parquet-list.")
-@click.option("--parquet-list", default=None,
-              help="Explicit newline-delimited file of shard paths -- no pattern semantics.")
-@click.option("--expect-files", type=int, default=None,
-              help="Assert the resolved shard count before tokenizing anything.")
+@click.option("--parquet-glob", default=None, help="Shard pattern, expanded with recursive=True. Prefer --parquet-list.")
+@click.option(
+    "--parquet-list", default=None, help="Explicit newline-delimited file of shard paths -- no pattern semantics."
+)
+@click.option(
+    "--expect-files", type=int, default=None, help="Assert the resolved shard count before tokenizing anything."
+)
 @click.option("--cache-path", required=True)
 @click.option("--tokenizer-path", required=True)
-@click.option("--messages-field", default=None,
-              help="Turns column. Ignored when --stage is given.")
-@click.option("--stage", type=click.Choice(sorted(STAGES)), default=None,
-              help="Take the turns column, chat template and component tag from the stage. "
-                   "Preferred: building a cache with the wrong template is silent at build "
-                   "time and only caught later by provenance validation.")
+@click.option("--messages-field", default=None, help="Turns column. Ignored when --stage is given.")
+@click.option(
+    "--stage",
+    type=click.Choice(sorted(STAGES)),
+    default=None,
+    help="Take the turns column, chat template and component tag from the stage. "
+    "Preferred: building a cache with the wrong template is silent at build "
+    "time and only caught later by provenance validation.",
+)
 @click.option("--tags", default="wildchat_386k,snowball_chat", show_default=True)
-@click.option("--expect-steps", type=int, default=None,
-              help="Assert the derived epoch length. Omit to DERIVE and report only, "
-                   "which is required for any dataset other than the pinned Chat cache.")
-def prepare_data_command(parquet_glob: str | None, parquet_list: str | None,
-                         expect_files: int | None, cache_path: str, tokenizer_path: str,
-                         messages_field: str | None, stage: str | None, tags: str,
-                         expect_steps: int | None) -> None:
+@click.option(
+    "--expect-steps",
+    type=int,
+    default=None,
+    help="Assert the derived epoch length. Omit to DERIVE and report only, "
+    "which is required for any dataset other than the pinned Chat cache.",
+)
+def prepare_data_command(
+    parquet_glob: str | None,
+    parquet_list: str | None,
+    expect_files: int | None,
+    cache_path: str,
+    tokenizer_path: str,
+    messages_field: str | None,
+    stage: str | None,
+    tags: str,
+    expect_steps: int | None,
+) -> None:
     if stage is not None:
         spec = STAGES[stage]
         messages_field = spec.messages_field
@@ -969,19 +1022,23 @@ def prepare_data_command(parquet_glob: str | None, parquet_list: str | None,
 @click.option("--dataset-id", required=True)
 @click.option("--dataset-revision", required=True)
 @click.option("--parquet-glob", default=None)
-@click.option("--parquet-list", default=None,
-              help="Explicit newline-delimited file of shard paths -- no pattern semantics.")
+@click.option(
+    "--parquet-list", default=None, help="Explicit newline-delimited file of shard paths -- no pattern semantics."
+)
 @click.option("--expect-files", type=int, default=None, help="Assert the resolved shard count.")
 @click.option("--tokenizer-path", required=True)
-def write_provenance_command(cache_path, stage, dataset_id, dataset_revision, parquet_glob,
-                             parquet_list, expect_files, tokenizer_path):
+def write_provenance_command(
+    cache_path, stage, dataset_id, dataset_revision, parquet_glob, parquet_list, expect_files, tokenizer_path
+):
     """Record which pinned source produced an already-built cache."""
-    shards = resolve_source_shards(
-        parquet_glob=parquet_glob, parquet_list=parquet_list, expect_files=expect_files
-    )
+    shards = resolve_source_shards(parquet_glob=parquet_glob, parquet_list=parquet_list, expect_files=expect_files)
     rec = write_cache_provenance(
-        cache_path=cache_path, stage=stage, dataset_id=dataset_id,
-        dataset_revision=dataset_revision, shard_paths=shards, tokenizer_path=tokenizer_path,
+        cache_path=cache_path,
+        stage=stage,
+        dataset_id=dataset_id,
+        dataset_revision=dataset_revision,
+        shard_paths=shards,
+        tokenizer_path=tokenizer_path,
     )
     click.echo(f"shards_hashed={len(rec['shards'])}")
     click.echo(f"dataset_revision={rec['dataset_revision']}")
@@ -1015,8 +1072,13 @@ def gpu_runtime_probe_command(data_cache_path: str, tokenizer_path: str) -> None
 @click.option("--steps", type=click.IntRange(min=1), default=SNOWBALL_CHAT_STEPS, show_default=True)
 @click.option("--devices", type=click.IntRange(min=1), default=SNOWBALL_CHAT_DEVICES, show_default=True)
 @click.option("--expected-output-checkpoint-step", type=click.IntRange(min=0))
-@click.option("--stage", type=click.Choice(sorted(STAGE_DATA)), default="chat", show_default=True,
-              help="Selects turns field, dataset tag, and whether the strict Chat epoch contract applies.")
+@click.option(
+    "--stage",
+    type=click.Choice(sorted(STAGE_DATA)),
+    default="chat",
+    show_default=True,
+    help="Selects turns field, dataset tag, and whether the strict Chat epoch contract applies.",
+)
 def preflight_command(
     init_checkpoint_path: str,
     data_cache_path: str,
@@ -1052,8 +1114,13 @@ def preflight_command(
 @click.option("--steps", type=click.IntRange(min=1), default=SNOWBALL_CHAT_STEPS, show_default=True)
 @click.option("--devices", type=click.IntRange(min=1), default=SNOWBALL_CHAT_DEVICES, show_default=True)
 @click.option("--expected-output-checkpoint-step", type=click.IntRange(min=0))
-@click.option("--stage", type=click.Choice(sorted(STAGE_DATA)), default="chat", show_default=True,
-              help="Selects turns field, dataset tag, and whether the strict Chat epoch contract applies.")
+@click.option(
+    "--stage",
+    type=click.Choice(sorted(STAGE_DATA)),
+    default="chat",
+    show_default=True,
+    help="Selects turns field, dataset tag, and whether the strict Chat epoch contract applies.",
+)
 def train_command(
     init_checkpoint_path: str,
     data_cache_path: str,
