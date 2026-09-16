@@ -47,7 +47,7 @@ major, rest = divmod(v.value, 10000); minor, patch = divmod(rest, 100)
 print(f"nccl_runtime={major}.{minor}.{patch} ({sos[0]})")
 assert (major, minor, patch) >= (2, 29, 3), "NCCL below 2.29.3 -- marin #7344"
 import jax; print("jax", jax.__version__, "backend", jax.default_backend(), "devices", jax.devices())
-import haliax, levanter; print("haliax", haliax.__version__, "levanter OK")
+import haliax, levanter; print("haliax + levanter import OK")
 import experiments.june_tpu_67b_a2b.moe.vista_snowball_chat as launcher
 print("launcher stages", sorted(launcher.STAGES))
 PYEOF
