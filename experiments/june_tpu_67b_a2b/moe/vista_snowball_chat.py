@@ -13,11 +13,11 @@ from __future__ import annotations
 import dataclasses
 import glob
 import hashlib
-from collections.abc import Sequence
 import json
 import math
 import os
 import shutil
+from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
 
@@ -35,6 +35,7 @@ from levanter.utils.mesh import MeshConfig
 from rigging.filesystem import prefix_join
 from transformers import AutoTokenizer
 
+from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeAdamHConfig
 from experiments.june_tpu_67b_a2b.moe.snowball_chat_recipe import (
     SNOWBALL_CHAT_BATCH_SIZE,
     SNOWBALL_CHAT_DEVICES,
@@ -618,6 +619,13 @@ class StageSpec:
     chat_template: str         # Delphi V0 for chat/thinking; Marin for nemotron_terminal
     fixed_steps: int | None    # a stage with a mandated budget (1888) rather than an epoch
     source_files: int          # exact number of pinned INPUT shards the cache must be built from
+    optimizer: GrugMoeAdamHConfig  # EXPLICIT per stage; the runner used to apply the Chat AdamH to every stage
+
+
+# Ben's agentic setting (marin #8225, PR #8172 ``_agentic_optimizer``): the Chat AdamH with both
+# learning rates at 5e-6. The reference Nemotron Terminal control trained with this, not with the
+# Chat 5e-5; the Vista Stage 3 hybrid ran at 5e-5 because the runner had a single optimizer.
+SNOWBALL_AGENTIC_OPTIMIZER = dataclasses.replace(SNOWBALL_CHAT_OPTIMIZER, learning_rate=5e-6, adam_lr=5e-6)
 
 
 STAGES: dict[str, StageSpec] = {
@@ -631,6 +639,7 @@ STAGES: dict[str, StageSpec] = {
         source_files=5,
         chat_template=DELPHI_V0_CHAT_TEMPLATE,
         fixed_steps=None,
+        optimizer=SNOWBALL_CHAT_OPTIMIZER,
     ),
     # Thinking chains from the COMPLETED Chat stage. init_step is exact: accepting
     # "any step >= 1" let a step-3 smoke checkpoint pass the gate.
@@ -644,6 +653,7 @@ STAGES: dict[str, StageSpec] = {
         source_files=15,
         chat_template=DELPHI_V0_CHAT_TEMPLATE,
         fixed_steps=None,
+        optimizer=SNOWBALL_CHAT_OPTIMIZER,
     ),
     # Stage 3, published as laion/snowball-67b-a2b-sft-s3-nemotron-terminal-step1888.
     # Deliberately NOT modelled on Chat/Thinking: different turns column, the MARIN
@@ -660,6 +670,9 @@ STAGES: dict[str, StageSpec] = {
         source_files=29,
         chat_template=MARIN_CHAT_TEMPLATE,
         fixed_steps=1888,
+        # Ben's reference setting. The completed Vista Stage 3 (job 984632) ran at the Chat 5e-5
+        # instead; a rerun with this value is what a hyperparameter-exact comparison needs.
+        optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
 }
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
@@ -884,7 +897,7 @@ def snowball_chat_run_config(
         model=dataclasses.replace(SNOWBALL_CHAT_MODEL_CONFIG, max_seq_len=SNOWBALL_CHAT_SEQUENCE_LENGTH),
         data=snowball_chat_data_config(cache_path=data_cache_path, tokenizer_path=tokenizer_path, stage=stage),
         resources=run_resources,
-        optimizer=SNOWBALL_CHAT_OPTIMIZER,
+        optimizer=STAGES[stage].optimizer,
         trainer=GrugTrainerConfig(
             trainer=trainer,
             z_loss_weight=1e-4,
