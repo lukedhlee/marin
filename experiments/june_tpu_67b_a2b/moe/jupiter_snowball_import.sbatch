@@ -30,6 +30,10 @@ set -euo pipefail
 
 module purge 2>/dev/null
 module load Stages/2026 GCC/14.3.0
+# Jupiter compute nodes have no /usr/bin/git, and levanter's tracker imports GitPython at import time,
+# which refuses to load without a git executable: load the git module and tell GitPython not to insist.
+module load git 2>/dev/null || true
+export GIT_PYTHON_REFRESH=quiet WANDB_DISABLE_GIT=true
 ulimit -c 0
 # The wheels want a newer libstdc++ than RHEL 9 ships; preload the GCC module's copy as on the GPU path.
 export LD_PRELOAD="$(gcc -print-file-name=libstdc++.so.6)"
