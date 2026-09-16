@@ -38,6 +38,10 @@ NCCL_OVERRIDE="${NCCL_OVERRIDE:-2.30.7}"   # the release Mrinal's completed stag
 S_SCRATCH="${SNOWBALL_SCRATCH:?set SNOWBALL_SCRATCH to the data root under /e/data1/mmlaion, never fscratch}"
 
 module purge 2>/dev/null; module load Stages/2026 GCC/14.3.0 CUDA/13
+# Jupiter compute nodes have no /usr/bin/git, and levanter's tracker imports GitPython at import time,
+# which refuses to load without a git executable: load the git module and tell GitPython not to insist.
+module load git 2>/dev/null || true
+export GIT_PYTHON_REFRESH=quiet WANDB_DISABLE_GIT=true
 ulimit -c 0   # an aborted 64-rank JAX job dumps hundreds of GB of cores into the cwd
 # The probes run in the batch step itself (no srun): pin them to one GPU as on a Vista node.
 export CUDA_VISIBLE_DEVICES=0
