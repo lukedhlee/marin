@@ -157,7 +157,35 @@ class LevanterSlurmCluster(clusters.SlurmCluster):
         return tasks_on_local_node
 
 
+def _split_top_level(node_list):
+    """Split a Slurm hostlist at the commas OUTSIDE brackets: "a-[1,2],b-[3-4,7],c-9" -> ["a-[1,2]", "b-[3-4,7]", "c-9"]."""
+    groups, depth, cur = [], 0, []
+    for ch in node_list:
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            groups.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        groups.append("".join(cur))
+    return [g for g in groups if g]
+
+
 def _square_brace_expand(node_list):
+    # A hostlist is a top-level comma list of groups; each group is a prefix with at most one bracketed
+    # range list. Expanding the whole string as one Cartesian product (the previous behaviour) only works
+    # for a single group and turns "a-[1,2],b-[3,4]" into "a-1,b-3" style strings that match no host.
+    expanded = []
+    for group in _split_top_level(node_list):
+        expanded.extend(_expand_group(group))
+    return expanded
+
+
+def _expand_group(node_list):
     # Find all parts of the sequence including text and number ranges
     parts = re.findall(r"(\[.*?\]|[^\[\]]+)", node_list)
 
