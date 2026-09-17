@@ -695,6 +695,29 @@ STAGES: dict[str, StageSpec] = {
         fixed_steps=None,
         optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
+    # Kimi-K2.5 SWE-smith Terminus-2 traces (open-athena/Kimi-2.5-swesmith-sandboxes-with_tests-
+    # oracle_verified_120s-maxeps-32k), the first SWE-bench-facing SFT set. Same init, column, template
+    # and optimizer as r2egym. The pinned parquet is built by OpenThoughts-Agent
+    # data/swesmith/kimi_sft_convert.py: 4,501 train rows (Stage-3 overlap, pygments, verifier errors
+    # removed; sqlparse/funcy/webargs held out whole; repo cap), <= 32,768 Marin tokens, and every
+    # assistant turn rewritten to <|start_think|>...<|end_think|> so the think markers are the special
+    # tokens the model emits, not the release's text tags. ~63M tokens, ~31 packed steps per epoch;
+    # max_steps caps EPOCHS x epoch at about eleven epochs.
+    "kimi_swesmith": StageSpec(
+        "conversations",
+        "kimi_swesmith_v1",
+        "s4_kimi_swesmith",
+        340,
+        init_step=0,
+        cache_tokens=None,
+        cache_examples=None,
+        cache_shards=1,
+        dataset_revision="1b87a9cf78b897a2355105d47afd44d818cad25d",
+        source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        fixed_steps=None,
+        optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+    ),
 }
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 

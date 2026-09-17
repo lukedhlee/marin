@@ -22,19 +22,23 @@
 set -euo pipefail
 
 S=${SNOWBALL_SCRATCH:?set SNOWBALL_SCRATCH to the data root under /e/data1/mmlaion, never fscratch}
-EXP=$S/experiments/snowball-r2egym-sft
+# The stage names the STAGES entry (turns column, template, pinned dataset, step ceiling). "r2egym"
+# keeps the original paths; any other stage gets its own experiment dir, and the imported step-0 init
+# is shared because every agentic stage starts from the same Stage-3 export.
+STAGE=${SNOWBALL_STAGE:-r2egym}
+if [ "$STAGE" = r2egym ]; then EXP=$S/experiments/snowball-r2egym-sft; else EXP=$S/experiments/snowball-$STAGE-sft; fi
 CACHE=${SNOWBALL_CACHE:-$EXP/cache-v1}
-INIT=${SNOWBALL_INIT:-$EXP/init-s3-step1888}
+INIT=${SNOWBALL_INIT:-$S/experiments/snowball-r2egym-sft/init-s3-step1888}
 TOK=${SNOWBALL_TOKENIZER:?set to the Stage-3 HF snapshot dir (holds tokenizer.json + chat_template.jinja)}
-OUT=${SNOWBALL_OUTPUT:-$EXP/r2egym-glm47-solved-v1-run1}
+if [ "$STAGE" = r2egym ]; then OUT=${SNOWBALL_OUTPUT:-$EXP/r2egym-glm47-solved-v1-run1}; else OUT=${SNOWBALL_OUTPUT:-$EXP/$STAGE-run1}; fi
 MARIN=${MARIN_ROOT:?}
 PYBIN=${MARIN_PYTHON:?}
 EPOCHS=${EPOCHS:-3}
 WALL=${SNOWBALL_WALL:-02:00:00}   # reformo's QOS caps booster jobs at 12 h; 75 steps need well under an hour
-RUN_ID=${SNOWBALL_RUN_ID:-snowball-r2egym-sft-run1}
+RUN_ID=${SNOWBALL_RUN_ID:-snowball-$STAGE-sft-run1}
 
 [ -d "$INIT" ]  || { echo "FATAL: imported native init missing: $INIT" >&2; exit 2; }
-[ -d "$CACHE" ] || { echo "FATAL: r2egym cache missing: $CACHE" >&2; exit 2; }
+[ -d "$CACHE" ] || { echo "FATAL: $STAGE cache missing: $CACHE" >&2; exit 2; }
 [ -e "$CACHE/INVALID_DO_NOT_USE.txt" ] && { echo "FATAL: $CACHE is marked INVALID" >&2; exit 2; }
 [ -z "$(find "$CACHE" -name '*.tmp.*' -print -quit)" ] || { echo "FATAL: $CACHE has unfinalized .tmp shards" >&2; exit 2; }
 
@@ -51,8 +55,8 @@ read -r STEPS EPOCH_STEPS INIT_STEP <<<"$(cd $MARIN && JAX_PLATFORMS=cpu $PYBIN 
 from experiments.june_tpu_67b_a2b.moe.vista_snowball_chat import (
     STAGES, derive_epoch_steps, read_chat_cache_tokens, validate_cache_provenance,
     validate_native_checkpoint_layout)
-s = STAGES["r2egym"]
-rec = validate_cache_provenance("$CACHE", "r2egym", "$TOK")
+s = STAGES["$STAGE"]
+rec = validate_cache_provenance("$CACHE", "$STAGE", "$TOK")
 assert len(rec["shards"]) == s.source_files, "cache provenance shard count != pinned"
 validate_native_checkpoint_layout("$INIT", expect_step=s.init_step)
 epoch = derive_epoch_steps(read_chat_cache_tokens("$CACHE"))
@@ -81,7 +85,7 @@ case "$NCCL" in
 esac
 
 cat <<PLAN
-stage           = r2egym
+stage           = ${STAGE}
 epochs          = ${EPOCHS}  (${EPOCH_STEPS} packed steps per epoch)
 steps           = ${STEPS}
 init            = ${INIT}   (required step ${INIT_STEP}, verified)
@@ -96,7 +100,7 @@ PLAN
 [ -e "$OUT" ] && { echo "FATAL: $OUT exists; refusing to reuse an output path" >&2; exit 2; }
 mkdir -p $S/logs
 
-sbatch -o $S/logs/snowball-r2egym.%j.log \
+sbatch -o $S/logs/snowball-$STAGE.%j.log \
   -t "$WALL" \
   -J "$RUN_ID" \
   --export=ALL,MARIN_ROOT=$MARIN,MARIN_PYTHON=$PYBIN,\
@@ -107,5 +111,5 @@ SNOWBALL_OUTPUT="$OUT",\
 SNOWBALL_RUN_ID="$RUN_ID",\
 SNOWBALL_STEPS="$STEPS",\
 SNOWBALL_SCRATCH="$S",\
-SNOWBALL_STAGE=r2egym,STALL_SECONDS=900 \
+SNOWBALL_STAGE="$STAGE",STALL_SECONDS=900 \
   $MARIN/experiments/june_tpu_67b_a2b/moe/jupiter_snowball_guarded.sbatch
