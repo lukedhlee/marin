@@ -941,11 +941,17 @@ def snowball_chat_run_config(
         load_checkpoint_path=None,
         initialize_from=latest_checkpoint_path(init_checkpoint_path),
     )
+    optimizer = STAGES[stage].optimizer or SNOWBALL_CHAT_OPTIMIZER
+    # SNOWBALL_LR overrides both AdamH learning rates for one run (the dose / overfit sweeps); the
+    # stage's pinned optimizer is the default and the launcher prints the value it resolved.
+    lr_override = os.environ.get("SNOWBALL_LR")
+    if lr_override:
+        optimizer = dataclasses.replace(optimizer, learning_rate=float(lr_override), adam_lr=float(lr_override))
     return GrugRunConfig(
         model=dataclasses.replace(SNOWBALL_CHAT_MODEL_CONFIG, max_seq_len=SNOWBALL_CHAT_SEQUENCE_LENGTH),
         data=snowball_chat_data_config(cache_path=data_cache_path, tokenizer_path=tokenizer_path, stage=stage),
         resources=run_resources,
-        optimizer=STAGES[stage].optimizer or SNOWBALL_CHAT_OPTIMIZER,
+        optimizer=optimizer,
         trainer=GrugTrainerConfig(
             trainer=trainer,
             z_loss_weight=1e-4,
