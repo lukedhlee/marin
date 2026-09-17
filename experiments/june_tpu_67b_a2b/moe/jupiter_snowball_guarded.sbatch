@@ -178,7 +178,7 @@ watchdog() {
   while true; do
     sleep 60
     now=$(date +%s)
-    cur=$(grep -oE "Progress on:train [0-9.]+it/${SNOWBALL_STEPS}it" "${RUNLOG}" 2>/dev/null | tail -1)
+    cur=$(grep -oE "Progress on:train [0-9.]+it/${SNOWBALL_STEPS}(\.0)?it" "${RUNLOG}" 2>/dev/null | tail -1)
     cur="${cur:-<none>}"
     if [ "${cur}" != "${last}" ]; then
       last="${cur}"; last_change=${now}; captures=0; continue
@@ -189,7 +189,7 @@ watchdog() {
       echo "WEDGE_SUSPECTED capture ${captures}/2 after ${stalled}s at progress=${last}"
       collect_forensics "n${captures}"
       if [ "${captures}" -ge 2 ]; then
-        cur=$(grep -oE "Progress on:train [0-9.]+it/${SNOWBALL_STEPS}it" "${RUNLOG}" 2>/dev/null | tail -1)
+        cur=$(grep -oE "Progress on:train [0-9.]+it/${SNOWBALL_STEPS}(\.0)?it" "${RUNLOG}" 2>/dev/null | tail -1)
         if [ "${cur:-<none>}" = "${last}" ]; then
           echo "WEDGE_CONFIRMED: no progress across two captures. Terminating so 16 nodes"
           echo "                 are not held unmonitored. Forensics: ${FORENSICS}"
