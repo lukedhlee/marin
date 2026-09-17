@@ -52,7 +52,12 @@ export TRITON_CC="$(command -v gcc)"; export CC="${TRITON_CC}"; export CXX="$(co
 export LD_PRELOAD="$(gcc -print-file-name=libstdc++.so.6)"
 export JAX_ENABLE_PGLE=false
 export XLA_FLAGS="--xla_gpu_enable_command_buffer= ${SNOWBALL_XLA_EXTRA:-}"
-export JAX_COMPILATION_CACHE_DIR="${S_SCRATCH}/jax-cache/snowball-r2egym"
+# The stage names the STAGES entry the cache is built for; the dataset id / revision are recorded in
+# the cache's provenance and must match what the stage pins (r2egym defaults, any other stage sets both).
+STAGE="${SNOWBALL_STAGE:-r2egym}"
+DATASET_ID="${SNOWBALL_DATASET_ID:-DCAgent/g1_clean_hybrid_scaffold_plus_r2eg_gfi_38k_glm47_traces}"
+DATASET_REVISION="${SNOWBALL_DATASET_REVISION:-4243a8f5cd39799803a6a0d52457fa0833068566}"
+export JAX_COMPILATION_CACHE_DIR="${S_SCRATCH}/jax-cache/snowball-${STAGE}"
 mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "${S_SCRATCH}/logs"
 export PYTHONPATH="${MARIN_ROOT}:${MARIN_ROOT}/lib/levanter/src:${MARIN_ROOT}/lib/haliax/src:${MARIN_ROOT}/lib/marin/src:${MARIN_ROOT}/lib/rigging/src:${MARIN_ROOT}/lib/fray/src:${MARIN_ROOT}/lib/zephyr/src:${MARIN_ROOT}/lib/iris/src"
 PY="${SNOWBALL_ENV}/bin/python"
@@ -80,13 +85,13 @@ step_cache() {
     echo "cache exists at ${SNOWBALL_CACHE}; validating instead of rebuilding"
   else
     "${PY}" -m experiments.june_tpu_67b_a2b.moe.vista_snowball_chat prepare-data \
-      --stage r2egym --parquet-list "${SNOWBALL_PARQUET_LIST}" --expect-files 1 \
+      --stage "${STAGE}" --parquet-list "${SNOWBALL_PARQUET_LIST}" --expect-files 1 \
       --cache-path "${SNOWBALL_CACHE}" --tokenizer-path "${SNOWBALL_TOKENIZER}" || return 1
   fi
   "${PY}" -m experiments.june_tpu_67b_a2b.moe.vista_snowball_chat write-provenance \
-    --cache-path "${SNOWBALL_CACHE}" --stage r2egym \
-    --dataset-id "DCAgent/g1_clean_hybrid_scaffold_plus_r2eg_gfi_38k_glm47_traces" \
-    --dataset-revision "4243a8f5cd39799803a6a0d52457fa0833068566" \
+    --cache-path "${SNOWBALL_CACHE}" --stage "${STAGE}" \
+    --dataset-id "${DATASET_ID}" \
+    --dataset-revision "${DATASET_REVISION}" \
     --parquet-list "${SNOWBALL_PARQUET_LIST}" --expect-files 1 \
     --tokenizer-path "${SNOWBALL_TOKENIZER}" || return 1
   "${PY}" - "${SNOWBALL_CACHE}" <<'PYEOF' || return 1
