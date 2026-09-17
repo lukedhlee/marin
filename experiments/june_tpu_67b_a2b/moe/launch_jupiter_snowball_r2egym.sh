@@ -88,6 +88,7 @@ cat <<PLAN
 stage           = ${STAGE}
 epochs          = ${EPOCHS}  (${EPOCH_STEPS} packed steps per epoch)
 steps           = ${STEPS}
+lr              = ${SNOWBALL_LR:-stage default}
 init            = ${INIT}   (required step ${INIT_STEP}, verified)
 cache           = ${CACHE}  (provenance verified)
 output          = ${OUT}    (fresh; optimizer/step reset by weights-only init)
@@ -111,5 +112,5 @@ SNOWBALL_OUTPUT="$OUT",\
 SNOWBALL_RUN_ID="$RUN_ID",\
 SNOWBALL_STEPS="$STEPS",\
 SNOWBALL_SCRATCH="$S",\
-SNOWBALL_STAGE="$STAGE",STALL_SECONDS=900 \
+SNOWBALL_STAGE="$STAGE",SNOWBALL_LR="${SNOWBALL_LR:-}",STALL_SECONDS=900 \
   $MARIN/experiments/june_tpu_67b_a2b/moe/jupiter_snowball_guarded.sbatch
