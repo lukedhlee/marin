@@ -89,6 +89,7 @@ stage           = ${SFT_STAGE}
 epochs          = ${EPOCHS}  (${EPOCH_STEPS} packed steps per epoch)
 steps           = ${STEPS}
 lr              = ${SNOWBALL_LR:-stage default}
+tail            = fraction ${SNOWBALL_TAIL_FRACTION:-0} ramp ${SNOWBALL_TAIL_RAMP:-0} ref ${SNOWBALL_TAIL_REF:-none} score_out ${SNOWBALL_TAIL_SCORE_OUT:-none}
 init            = ${INIT}   (required step ${INIT_STEP}, verified)
 cache           = ${CACHE}  (provenance verified)
 output          = ${OUT}    (fresh; optimizer/step reset by weights-only init)

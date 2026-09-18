@@ -6,17 +6,20 @@ from __future__ import annotations
 import dataclasses
 import faulthandler
 import functools
+import json
 import logging
 import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import cast
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import levanter.callbacks as callbacks
 import levanter.tracker
 import optax
@@ -36,6 +39,13 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.grug.loss import (
+    _axis_names_from_spec,
+    _batch_axis_spec,
+    _current_mesh,
+    _psum_over_axes,
+    _reshard_for_shard_map,
+)
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -46,6 +56,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.june_tpu_67b_a2b.checkpointing import restore_grug_state_from_checkpoint
 from experiments.june_tpu_67b_a2b.dispatch import dispatch_grug_training_run
+from experiments.june_tpu_67b_a2b.moe import tail_filter
 from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -117,6 +128,22 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+
+    # TailSFT (arXiv 2608.25756; `tail_filter.py`). ``tail_fraction == 0`` (default) is the untouched
+    # training path, byte for byte: the branch is a Python-level ``if`` on this static value. With
+    # ``tail_fraction > 0`` every step drops that fraction of the documents in the global batch whose
+    # length-normalised loss has fallen the most below the reference loss recorded for the same document
+    # (cache row) under the initial checkpoint, so the gradient concentrates on the documents the model has
+    # not fit yet. ``tail_ref_loss_path`` is the ``(num_docs,)`` float32 ``.npy`` that the scoring pass
+    # writes (NaN = never scored, never dropped); ``tail_ramp_steps > 0`` ramps the fraction linearly from 0
+    # over that many steps. ``tail_score_out`` switches the run into the scoring pass instead of training:
+    # one forward-only sweep over ``num_train_steps`` batches of the training loader from step 0 with the
+    # initial weights, writing the reference vector and exiting without a checkpoint.
+    tail_fraction: float = 0.0
+    tail_ref_loss_path: str | None = None
+    tail_ramp_steps: int = 0
+    tail_num_docs: int | None = None
+    tail_score_out: str | None = None
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -462,9 +489,12 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
+    tail: "TailSettings | None" = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
+    # TailSFT: a static Python-level branch, so ``tail is None`` compiles today's exact loss lines.
+    tail_ref_np = None if tail is None else tail.ref_loss
     if watch_config is not None:
         if isinstance(watch_config.watch_targets, str):
             watch_targets = tuple(t.strip() for t in watch_config.watch_targets.split(","))
@@ -483,16 +513,44 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
-        def loss_fn(params):
-            compute_params = mp.cast_to_compute(params)
-            return compute_params.next_token_loss(
-                batch.tokens,
-                batch.loss_weight,
-                mask=batch.attn_mask,
-                reduction="mean",
-                logsumexp_weight=z_loss,
-                return_router_metrics=True,
-            )
+        if tail is None:
+
+            def loss_fn(params):
+                compute_params = mp.cast_to_compute(params)
+                return compute_params.next_token_loss(
+                    batch.tokens,
+                    batch.loss_weight,
+                    mask=batch.attn_mask,
+                    reduction="mean",
+                    logsumexp_weight=z_loss,
+                    return_router_metrics=True,
+                )
+
+        else:
+            segment_ids = _packed_segment_ids(batch)
+
+            def loss_fn(params):
+                compute_params = mp.cast_to_compute(params)
+                # One vocab projection: the per-position (weighted) loss, reduced by hand below.
+                per_pos, summarized = compute_params.next_token_loss(
+                    batch.tokens,
+                    batch.loss_weight,
+                    mask=batch.attn_mask,
+                    reduction="none",
+                    logsumexp_weight=z_loss,
+                    return_router_metrics=True,
+                )
+                fraction = tail_filter.tail_schedule(state.step, tail.fraction, tail.ramp_steps)
+                ref = jnp.asarray(tail_ref_np, dtype=jnp.float32)
+                loss, tail_stats = _tail_filtered_loss_sharded(per_pos, batch.loss_weight, segment_ids, ref, fraction)
+                # ``reduction="none"`` returns the bare cross-entropy array: re-add the router z-loss term the
+                # "mean" path adds (coefficient 0.0 on this config, kept for parity) and replace the
+                # per-position array the metrics carry with the unfiltered scalar mean.
+                loss = loss + summarized["train/router/aux_loss_weighted"]
+                summarized = dict(summarized)
+                summarized["train/cross_entropy_loss"] = tail_stats["tail/loss_unfiltered"]
+                summarized.update({f"train/{k}": v for k, v in tail_stats.items()})
+                return loss, summarized
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
@@ -539,6 +597,146 @@ def _make_train_step(
     return train_step
 
 
+@dataclass(frozen=True)
+class TailSettings:
+    """Resolved TailSFT settings for one run: the static fraction/ramp and the host-side reference vector."""
+
+    fraction: float
+    ramp_steps: int
+    ref_loss: np.ndarray  # (num_docs,) float32, NaN = never scored
+
+
+def _packed_segment_ids(batch) -> jax.Array:
+    """The ``(B, S)`` int32 segment ids of a packed batch (global cache row per token, ``-1`` padding)."""
+    mask = getattr(batch, "attn_mask", None)
+    segment_ids = getattr(mask, "segment_ids", None)
+    if segment_ids is None:
+        raise ValueError("TailSFT needs packed batches with segment ids; this batch carries none.")
+    return segment_ids[0]
+
+
+def _tail_shard_map(fn, per_pos: jax.Array, weight: jax.Array, segment_ids: jax.Array, *replicated, out_specs):
+    """Run ``fn(per_pos, weight, seg, *replicated, psum=...)`` on local shards over the batch axes.
+
+    Mirrors ``levanter.grug.loss``: rows stay sharded over the batch axes the per-position loss already
+    carries, the extra arguments are replicated, and ``fn`` psums its own per-document / scalar results so
+    every device returns identical replicated values.
+    """
+    mesh = _current_mesh()
+    if mesh is None or mesh.empty:
+        return fn(per_pos, weight, segment_ids, *replicated)
+    axis_spec = _batch_axis_spec(per_pos)
+    axis_names = _axis_names_from_spec(axis_spec)
+    row_spec = P(axis_spec)
+    rep_spec = P()
+    per_pos = _reshard_for_shard_map(per_pos, mesh, row_spec)
+    weight = _reshard_for_shard_map(weight, mesh, row_spec)
+    segment_ids = _reshard_for_shard_map(segment_ids, mesh, row_spec)
+    replicated = tuple(_reshard_for_shard_map(r, mesh, rep_spec) for r in replicated)
+
+    def _psum(x):
+        return _psum_over_axes(x, axis_names)
+
+    def _local(a, b, c, *r):
+        return fn(a, b, c, *r, psum=_psum)
+
+    return jax.shard_map(
+        _local,
+        mesh=mesh,
+        in_specs=(row_spec, row_spec, row_spec) + (rep_spec,) * len(replicated),
+        out_specs=out_specs,
+        check_vma=False,
+    )(per_pos, weight, segment_ids, *replicated)
+
+
+def _tail_filtered_loss_sharded(per_pos, weight, segment_ids, ref_loss, fraction):
+    stats_specs = {k: P() for k in tail_filter.STAT_KEYS}
+    return _tail_shard_map(
+        tail_filter.tail_filtered_loss, per_pos, weight, segment_ids, ref_loss, fraction, out_specs=(P(), stats_specs)
+    )
+
+
+def _tail_document_sums_sharded(per_pos, weight, segment_ids, num_docs: int):
+    def _sums(a, b, c, *, psum):
+        return tail_filter.document_sums(a, b, c, num_docs, psum=psum)
+
+    return _tail_shard_map(_sums, per_pos, weight, segment_ids, out_specs=(P(), P()))
+
+
+def _make_tail_score_step(mp: jmp.Policy, *, z_loss_weight: float, num_docs: int):
+    """Forward-only per-document (loss sum, weight sum) with the current weights, the reference scorer."""
+    z_loss = z_loss_weight if z_loss_weight > 0 else None
+
+    @jax.jit
+    def score_step(params, pending_qb_betas, batch):
+        qb_params = _apply_qb_betas(params, pending_qb_betas)
+        compute_params = mp.cast_to_compute(qb_params)
+        per_pos = compute_params.next_token_loss(
+            batch.tokens,
+            batch.loss_weight,
+            mask=batch.attn_mask,
+            reduction="none",
+            logsumexp_weight=z_loss,
+        )
+        return _tail_document_sums_sharded(per_pos, batch.loss_weight, _packed_segment_ids(batch), num_docs)
+
+    return score_step
+
+
+def _run_tail_scoring(
+    *,
+    state: "GrugTrainState",
+    train_loader,
+    mp: jmp.Policy,
+    z_loss_weight: float,
+    num_docs: int,
+    num_batches: int,
+    out_path: str,
+) -> None:
+    """Score every training document under the initial weights and write the reference vector.
+
+    Replays the training loader from step 0 for ``num_batches`` batches (one packed epoch when the caller
+    sets ``num_train_steps`` to the epoch length), so the batches the first epoch will train on are scored
+    in the same composition (the MoE routes at capacity, so a document's loss depends on its batch).
+    Progress lines follow the trainer's ``Progress on:train`` format so the guarded job's watchdog sees them.
+    """
+    score_step = _make_tail_score_step(mp, z_loss_weight=z_loss_weight, num_docs=num_docs)
+    num = np.zeros(num_docs, dtype=np.float64)
+    den = np.zeros(num_docs, dtype=np.float64)
+    iterator = train_loader.iter_from_step(0)
+    t0 = time.perf_counter()
+    for i in range(num_batches):
+        batch = next(iterator)
+        b_num, b_den = score_step(state.params, state.pending_qb_betas, batch)
+        b_num = np.asarray(jax.device_get(b_num), dtype=np.float64)
+        b_den = np.asarray(jax.device_get(b_den), dtype=np.float64)
+        num += b_num
+        den += b_den
+        seen = int((den > 0).sum())
+        batch_loss = float(b_num.sum() / b_den.sum()) if b_den.sum() > 0 else float("nan")
+        logger.info(
+            f"Progress on:train {i + 1}.0it/{num_batches}.0it tail_score docs_seen={seen}/{num_docs} "
+            f"batch_loss={batch_loss:.4f} elapsed={time.perf_counter() - t0:.0f}s"
+        )
+    ref = np.full(num_docs, np.nan, dtype=np.float32)
+    scored = den > 0
+    ref[scored] = (num[scored] / den[scored]).astype(np.float32)
+    if jax.process_index() == 0:
+        out = Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        np.save(out, ref)
+        meta = {
+            "num_docs": int(num_docs),
+            "scored_docs": int(scored.sum()),
+            "batches": int(num_batches),
+            "weighted_tokens": float(den.sum()),
+            "mean_loss": float(num[scored].sum() / den[scored].sum()) if scored.any() else None,
+            "z_loss_weight": z_loss_weight,
+        }
+        out.with_suffix(".json").write_text(json.dumps(meta, indent=1))
+        logger.info(f"TAIL_SCORE_DONE {out} scored={meta['scored_docs']}/{num_docs} mean_loss={meta['mean_loss']}")
+
+
 def run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
@@ -551,12 +749,29 @@ def run_grug_local(config: GrugRunConfig) -> None:
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
+    tail: TailSettings | None = None
+    if config.trainer.tail_score_out is None and config.trainer.tail_fraction > 0:
+        if not config.trainer.tail_ref_loss_path or config.trainer.tail_num_docs is None:
+            raise ValueError("tail_fraction > 0 needs tail_ref_loss_path (the scoring pass output) and tail_num_docs.")
+        if not (0.0 < config.trainer.tail_fraction < 1.0):
+            raise ValueError(f"tail_fraction must lie in (0, 1); got {config.trainer.tail_fraction}.")
+        ref = tail_filter.load_reference_losses(config.trainer.tail_ref_loss_path, config.trainer.tail_num_docs)
+        tail = TailSettings(
+            fraction=float(config.trainer.tail_fraction),
+            ramp_steps=int(config.trainer.tail_ramp_steps),
+            ref_loss=ref,
+        )
+        logger.info(
+            f"TailSFT on: fraction={tail.fraction} ramp_steps={tail.ramp_steps} "
+            f"reference={config.trainer.tail_ref_loss_path} scored_docs={int(np.isfinite(ref).sum())}/{ref.shape[0]}"
+        )
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
+        tail=tail,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -687,6 +902,25 @@ def run_grug_local(config: GrugRunConfig) -> None:
                     every=interval,
                 )
 
+        if config.trainer.tail_score_out is not None:
+            # TailSFT reference pass: forward-only over one epoch of the training loader with the initial
+            # weights, then exit. No checkpoint, no training.
+            if config.trainer.tail_num_docs is None:
+                raise ValueError("tail_score_out needs tail_num_docs (the cache's document count).")
+            if int(state.step) != 0:
+                raise ValueError(f"tail scoring must start from step 0, found a resumed state at step {int(state.step)}.")
+            _run_tail_scoring(
+                state=state,
+                train_loader=train_loader,
+                mp=trainer.mp,
+                z_loss_weight=config.trainer.z_loss_weight,
+                num_docs=int(config.trainer.tail_num_docs),
+                num_batches=int(trainer.num_train_steps),
+                out_path=config.trainer.tail_score_out,
+            )
+            levanter.tracker.current_tracker().finish()
+            return
+
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
@@ -720,7 +954,7 @@ def run_grug_local(config: GrugRunConfig) -> None:
                     router_metrics = {
                         key: value
                         for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
+                        if (key.startswith("train/router/") or key.startswith("moe_bias/") or key.startswith("train/tail/"))
                         and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
                     }
                     if router_metrics:
