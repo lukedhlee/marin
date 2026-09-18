@@ -695,16 +695,20 @@ def _run_tail_scoring(
 ) -> None:
     """Score every training document under the initial weights and write the reference vector.
 
-    Replays the training loader from step 0 for ``num_batches`` batches (one packed epoch when the caller
-    sets ``num_train_steps`` to the epoch length), so the batches the first epoch will train on are scored
-    in the same composition (the MoE routes at capacity, so a document's loss depends on its batch).
-    Progress lines follow the trainer's ``Progress on:train`` format so the guarded job's watchdog sees them.
+    Replays the training loader from step 0, so the first batches are scored in the composition the first
+    training steps will see (the MoE routes at capacity, so a document's loss depends on its batch), and
+    keeps going for up to ``num_batches`` batches or until every document has been scored, whichever comes
+    first. The mixture loader samples rows with replacement (one epoch of the 320-trial cache reached 200
+    documents), so callers pass several epochs' worth of batches; a document drawn more than once gets the
+    token-weighted mean of its occurrences. Progress lines follow the trainer's ``Progress on:train`` format
+    so the guarded job's watchdog sees them.
     """
     score_step = _make_tail_score_step(mp, z_loss_weight=z_loss_weight, num_docs=num_docs)
     num = np.zeros(num_docs, dtype=np.float64)
     den = np.zeros(num_docs, dtype=np.float64)
     iterator = train_loader.iter_from_step(0)
     t0 = time.perf_counter()
+    batches_run = 0
     for i in range(num_batches):
         batch = next(iterator)
         b_num, b_den = score_step(state.params, state.pending_qb_betas, batch)
@@ -712,12 +716,16 @@ def _run_tail_scoring(
         b_den = np.asarray(jax.device_get(b_den), dtype=np.float64)
         num += b_num
         den += b_den
+        batches_run = i + 1
         seen = int((den > 0).sum())
         batch_loss = float(b_num.sum() / b_den.sum()) if b_den.sum() > 0 else float("nan")
         logger.info(
             f"Progress on:train {i + 1}.0it/{num_batches}.0it tail_score docs_seen={seen}/{num_docs} "
             f"batch_loss={batch_loss:.4f} elapsed={time.perf_counter() - t0:.0f}s"
         )
+        if seen >= num_docs:
+            logger.info(f"tail_score: every document scored after {batches_run} batches; stopping early")
+            break
     ref = np.full(num_docs, np.nan, dtype=np.float32)
     scored = den > 0
     ref[scored] = (num[scored] / den[scored]).astype(np.float32)
@@ -959,6 +967,22 @@ def run_grug_local(config: GrugRunConfig) -> None:
                     }
                     if router_metrics:
                         levanter.tracker.log(router_metrics, step=step)
+                    if tail is not None and step % log_every == 0:
+                        # The tracker is offline on the clusters; keep the filter's behaviour in the run log.
+                        logger.info(
+                            "tail step %d: fraction %.3f dropped %d of %d scorable (%d present), kept tokens %.3f, "
+                            "loss %.4f unfiltered %.4f, threshold margin %.4f, mean margin %.4f",
+                            step,
+                            float(metrics["train/tail/fraction"]),
+                            int(metrics["train/tail/dropped_docs"]),
+                            int(metrics["train/tail/scorable_docs"]),
+                            int(metrics["train/tail/present_docs"]),
+                            float(metrics["train/tail/kept_token_frac"]),
+                            float(metrics["train/loss"]),
+                            float(metrics["train/tail/loss_unfiltered"]),
+                            float(metrics["train/tail/threshold_margin"]),
+                            float(metrics["train/tail/mean_margin"]),
+                        )
                     if "train/cross_entropy_loss" in metrics:
                         levanter.tracker.log(
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
