@@ -153,6 +153,16 @@ def prepare_chat_cache(
     return read_chat_cache_tokens(cache_path)
 
 
+def read_chat_cache_examples(cache_path: str) -> int:
+    """Number of documents (cache rows) in the packed train cache; TailSFT indexes its reference vector by it."""
+    stats_path = Path(cache_path) / "train" / ".stats.json"
+    stats = json.loads(stats_path.read_text())
+    total_elements = stats.get("total_elements")
+    if not isinstance(total_elements, int) or total_elements <= 0:
+        raise ValueError(f"Invalid total_elements in {stats_path}: {total_elements!r}")
+    return total_elements
+
+
 def read_chat_cache_tokens(cache_path: str) -> int:
     stats_path = Path(cache_path) / "train" / ".stats.json"
     stats = json.loads(stats_path.read_text())
@@ -947,6 +957,20 @@ def snowball_chat_run_config(
     lr_override = os.environ.get("SNOWBALL_LR")
     if lr_override:
         optimizer = dataclasses.replace(optimizer, learning_rate=float(lr_override), adam_lr=float(lr_override))
+    # TailSFT knobs (train.py GrugTrainerConfig, tail_filter.py), all off by default. SNOWBALL_TAIL_SCORE_OUT
+    # turns the run into the forward-only reference pass over one epoch (launch with EPOCHS=1) and writes the
+    # (num_docs,) .npy there; SNOWBALL_TAIL_FRACTION + SNOWBALL_TAIL_REF train the filtered objective;
+    # SNOWBALL_TAIL_RAMP ramps the fraction linearly from 0 over that many steps.
+    tail_fraction = float(os.environ.get("SNOWBALL_TAIL_FRACTION") or 0.0)
+    tail_ref = os.environ.get("SNOWBALL_TAIL_REF") or None
+    tail_ramp = int(os.environ.get("SNOWBALL_TAIL_RAMP") or 0)
+    tail_score_out = os.environ.get("SNOWBALL_TAIL_SCORE_OUT") or None
+    tail_num_docs = read_chat_cache_examples(data_cache_path) if (tail_fraction > 0 or tail_score_out) else None
+    if tail_score_out and steps != full_epoch_steps:
+        raise ValueError(
+            f"the TailSFT scoring pass covers exactly one packed epoch: launch it with EPOCHS=1 "
+            f"({full_epoch_steps} steps), got --steps {steps}."
+        )
     return GrugRunConfig(
         model=dataclasses.replace(SNOWBALL_CHAT_MODEL_CONFIG, max_seq_len=SNOWBALL_CHAT_SEQUENCE_LENGTH),
         data=snowball_chat_data_config(cache_path=data_cache_path, tokenizer_path=tokenizer_path, stage=stage),
@@ -961,6 +985,11 @@ def snowball_chat_run_config(
             model_axis_size=SNOWBALL_CHAT_MODEL_AXIS,
             expert_axis_size=SNOWBALL_CHAT_EXPERT_PARALLEL,
             sft_weights_only_init=True,
+            tail_fraction=tail_fraction,
+            tail_ref_loss_path=tail_ref,
+            tail_ramp_steps=tail_ramp,
+            tail_num_docs=tail_num_docs,
+            tail_score_out=tail_score_out,
         ),
         eval=None,
     )
