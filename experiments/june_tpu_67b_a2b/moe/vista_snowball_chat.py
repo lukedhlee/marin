@@ -966,10 +966,11 @@ def snowball_chat_run_config(
     tail_ramp = int(os.environ.get("SNOWBALL_TAIL_RAMP") or 0)
     tail_score_out = os.environ.get("SNOWBALL_TAIL_SCORE_OUT") or None
     tail_num_docs = read_chat_cache_examples(data_cache_path) if (tail_fraction > 0 or tail_score_out) else None
-    if tail_score_out and steps != full_epoch_steps:
+    if tail_score_out and steps < full_epoch_steps:
         raise ValueError(
-            f"the TailSFT scoring pass covers exactly one packed epoch: launch it with EPOCHS=1 "
-            f"({full_epoch_steps} steps), got --steps {steps}."
+            f"the TailSFT scoring pass needs at least one packed epoch of batches ({full_epoch_steps} steps); "
+            f"got --steps {steps}. The loader samples with replacement, so launch with EPOCHS=6: the pass "
+            f"stops early once every document has been scored."
         )
     return GrugRunConfig(
         model=dataclasses.replace(SNOWBALL_CHAT_MODEL_CONFIG, max_seq_len=SNOWBALL_CHAT_SEQUENCE_LENGTH),
