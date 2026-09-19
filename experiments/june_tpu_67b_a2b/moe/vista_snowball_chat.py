@@ -728,6 +728,31 @@ STAGES: dict[str, StageSpec] = {
         fixed_steps=None,
         optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
+    # OpenThoughts-Agent SFT-100K (open-thoughts/OpenThoughts-Agent-SFT-100K), GLM-4.7 Terminus-2 traces
+    # over four slices: SWE-smith, IssueTasks, SuperUser and Tezos. Same init, column, template and
+    # optimizer as kimi_swesmith. The pinned parquet is built by OpenThoughts-Agent
+    # data/swesmith/ota_sft_convert.py from the 2026-09-18 audit manifest: 50,053 train rows / 617.9M
+    # tokens, 5 % of tasks held out by task hash so a task's rollouts never straddle the split,
+    # structurally incomplete traces and tasks Stage 3 or our evals already saw removed, and Harbor's
+    # own proactive-compaction rollouts KEPT (1,760 of them) because the eval harness summarizes too.
+    # ~304 packed steps per epoch, so max_steps caps EPOCHS x epoch at four epochs. The list is one
+    # merged shard per scope: parquet.list is all four slices, parquet.swe3.list drops IssueTasks
+    # (38,695 rows / 477.3M tokens) -- either way ONE source file and ONE cache shard.
+    "ota": StageSpec(
+        "conversations",
+        "ota_sft_100k_v1",
+        "s4_ota",
+        1220,
+        init_step=0,
+        cache_tokens=None,
+        cache_examples=None,
+        cache_shards=1,
+        dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b",
+        source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        fixed_steps=None,
+        optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+    ),
 }
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
@@ -921,6 +946,15 @@ def snowball_chat_run_config(
         )
 
     run_resources = ResourceConfig.with_gpu("GH200", count=1, replicas=devices)
+    # Permanent-checkpoint interval. The default 1,000 keeps only the final checkpoint of a run this
+    # short, which is all a single-dose arm needs. SNOWBALL_KEEP_PER_EPOCH=1 keeps one per packed epoch
+    # instead, so one run yields the whole dose curve (export + score each epoch); SNOWBALL_KEEP_EVERY
+    # sets the interval outright. Temporary time-based saves are unaffected.
+    keep_every = int(os.environ.get("SNOWBALL_KEEP_EVERY") or 0)
+    if not keep_every and os.environ.get("SNOWBALL_KEEP_PER_EPOCH") == "1":
+        keep_every = full_epoch_steps
+    keep_every = keep_every or 1000
+    print(f"checkpoint_keep_every={keep_every}", flush=True)
     trainer = TrainerConfig(
         id=run_id,
         seed=SNOWBALL_CHAT_SEED,
@@ -944,7 +978,7 @@ def snowball_chat_run_config(
             temporary_base_path=prefix_join(output_path, "checkpoints-tmp"),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=30),
-            keep=[{"every": 1000}],
+            keep=[{"every": keep_every}],
             timeout=timedelta(hours=2),
         ),
         load_checkpoint=None,
