@@ -731,18 +731,19 @@ STAGES: dict[str, StageSpec] = {
     # OpenThoughts-Agent SFT-100K (open-thoughts/OpenThoughts-Agent-SFT-100K), GLM-4.7 Terminus-2 traces
     # over four slices: SWE-smith, IssueTasks, SuperUser and Tezos. Same init, column, template and
     # optimizer as kimi_swesmith. The pinned parquet is built by OpenThoughts-Agent
-    # data/swesmith/ota_sft_convert.py from the 2026-09-18 audit manifest: 50,053 train rows / 617.9M
-    # tokens, 5 % of tasks held out by task hash so a task's rollouts never straddle the split,
-    # structurally incomplete traces and tasks Stage 3 or our evals already saw removed, and Harbor's
-    # own proactive-compaction rollouts KEPT (1,760 of them) because the eval harness summarizes too.
-    # ~304 packed steps per epoch, so max_steps caps EPOCHS x epoch at four epochs. The list is one
-    # merged shard per scope: parquet.list is all four slices, parquet.swe3.list drops IssueTasks
-    # (38,695 rows / 477.3M tokens) -- either way ONE source file and ONE cache shard.
+    # data/swesmith/ota_sft_convert.py from the 2026-09-18 audit manifest. v2 (2026-09-19, --screen
+    # reference) keeps every trace the release trained on -- timed-out and mid-work rollouts, Stage-3
+    # overlap and Harbor's own proactive-compaction rollouts included -- and drops only rows flagged for
+    # evaluation leakage: ~94k rows, 5 % of tasks held out by task hash so a task's rollouts never
+    # straddle the split. (v1, --screen strict, was 50,053 rows / 617.9M tokens / ~304 steps per epoch.)
+    # About 600 packed steps per epoch at v2, so max_steps caps EPOCHS x epoch at four epochs; a subset
+    # cache (the lr sweep) derives a shorter epoch under the same ceiling. The list is ONE merged shard
+    # per set -- ONE source file and ONE cache shard.
     "ota": StageSpec(
         "conversations",
-        "ota_sft_100k_v1",
+        "ota_sft_100k_v2",
         "s4_ota",
-        1220,
+        2600,
         init_step=0,
         cache_tokens=None,
         cache_examples=None,
