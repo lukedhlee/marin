@@ -754,6 +754,25 @@ STAGES: dict[str, StageSpec] = {
         fixed_steps=None,
         optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
+    # OTA v2 + the instruction-following slice (open-athena/nemotron-gym-if-v2-qwen3.5-122b-32k-traces @ 50b7f77,
+    # 12,484 clean Terminus-2 traces / 55M tokens = 4.2 % of the mix; 477 tasks held out for the harness probe).
+    # One merged shard, 1,000-row row groups; ~656 packed steps per epoch. Paired against the "ota" stage at the
+    # same recipe to read whether in-format constraint following transfers (2026-09-19).
+    "ota_if": StageSpec(
+        "conversations",
+        "ota_if_sft_v1",
+        "s4_ota_if",
+        2700,
+        init_step=0,
+        cache_tokens=None,
+        cache_examples=None,
+        cache_shards=1,
+        dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77",
+        source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        fixed_steps=None,
+        optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+    ),
 }
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
