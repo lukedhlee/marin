@@ -1000,6 +1000,11 @@ def snowball_chat_run_config(
     tail_ref = os.environ.get("SNOWBALL_TAIL_REF") or None
     tail_ramp = int(os.environ.get("SNOWBALL_TAIL_RAMP") or 0)
     tail_score_out = os.environ.get("SNOWBALL_TAIL_SCORE_OUT") or None
+    # SNOWBALL_SCHEDULE_STEPS: the lr-schedule horizon when it is longer than this run's steps (train one epoch of
+    # a two-epoch cosine now, resume to the second later on the same output; train.py GrugTrainerConfig).
+    schedule_steps = int(os.environ.get("SNOWBALL_SCHEDULE_STEPS") or 0) or None
+    if schedule_steps is not None and schedule_steps < steps:
+        raise ValueError(f"SNOWBALL_SCHEDULE_STEPS={schedule_steps} is shorter than the run's {steps} steps")
     tail_num_docs = read_chat_cache_examples(data_cache_path) if (tail_fraction > 0 or tail_score_out) else None
     if tail_score_out and steps < full_epoch_steps:
         raise ValueError(
@@ -1026,6 +1031,7 @@ def snowball_chat_run_config(
             tail_ramp_steps=tail_ramp,
             tail_num_docs=tail_num_docs,
             tail_score_out=tail_score_out,
+            schedule_steps=schedule_steps,
         ),
         eval=None,
     )
