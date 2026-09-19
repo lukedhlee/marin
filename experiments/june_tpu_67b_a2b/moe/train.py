@@ -1012,7 +1012,12 @@ def run_grug_local(config: GrugRunConfig) -> None:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
-                checkpointer.on_step(tree=state, step=int(state.step), force=True)
+                # The loop already saved this step when it fell on a permanent-keep interval (e.g. keep every
+                # epoch with the run ending on an epoch): a second, forced save into the same step directory
+                # aborts every host in multihost_utils.assert_equal (job 1890618, 2026-09-19). Force only when
+                # the last step has not been saved yet.
+                if checkpointer._last_save_step != int(state.step):
+                    checkpointer.on_step(tree=state, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
