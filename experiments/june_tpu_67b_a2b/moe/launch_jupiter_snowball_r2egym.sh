@@ -66,6 +66,12 @@ print(steps, epoch, s.init_step)
 PY
 )"
 [ -n "${STEPS:-}" ] || { echo "FATAL: could not derive the step budget" >&2; exit 3; }
+# SNOWBALL_SCHEDULE_EPOCHS (>= EPOCHS): the lr schedule spans that many epochs while this run trains EPOCHS of
+# them; resume later with SNOWBALL_RESUME=1, the same OUTPUT and a larger EPOCHS (same SCHEDULE_EPOCHS) and the
+# trainer continues from the kept checkpoint (optimizer state and step included) on the unchanged schedule.
+SCHEDULE_EPOCHS=${SNOWBALL_SCHEDULE_EPOCHS:-$EPOCHS}
+[ "$SCHEDULE_EPOCHS" -ge "$EPOCHS" ] || { echo "FATAL: SNOWBALL_SCHEDULE_EPOCHS=$SCHEDULE_EPOCHS < EPOCHS=$EPOCHS" >&2; exit 3; }
+SCHEDULE_STEPS=$((SCHEDULE_EPOCHS * EPOCH_STEPS))
 
 # Ask the NCCL library itself which release JAX will load (marin #7344: < 2.29.3 wedges on aarch64).
 NCCL=$($PYBIN - <<'PY' 2>/dev/null
@@ -87,7 +93,7 @@ esac
 cat <<PLAN
 stage           = ${SFT_STAGE}
 epochs          = ${EPOCHS}  (${EPOCH_STEPS} packed steps per epoch)
-steps           = ${STEPS}
+steps           = ${STEPS}   (lr schedule over ${SCHEDULE_STEPS} = ${SCHEDULE_EPOCHS} epochs; resume=${SNOWBALL_RESUME:-0})
 lr              = ${SNOWBALL_LR:-stage default}
 tail            = fraction ${SNOWBALL_TAIL_FRACTION:-0} ramp ${SNOWBALL_TAIL_RAMP:-0} ref ${SNOWBALL_TAIL_REF:-none} score_out ${SNOWBALL_TAIL_SCORE_OUT:-none}
 init            = ${INIT}   (required step ${INIT_STEP}, verified)
@@ -99,7 +105,12 @@ wall            = ${WALL}
 PLAN
 
 [ "${DRY_RUN:-0}" = "1" ] && { echo "DRY_RUN=1 -- not submitting."; exit 0; }
-[ -e "$OUT" ] && { echo "FATAL: $OUT exists; refusing to reuse an output path" >&2; exit 2; }
+if [ "${SNOWBALL_RESUME:-0}" = "1" ]; then
+  [ -d "$OUT/checkpoints" ] || { echo "FATAL: SNOWBALL_RESUME=1 but no $OUT/checkpoints to resume from" >&2; exit 2; }
+  echo "resuming from the latest checkpoint under $OUT/checkpoints: $(ls "$OUT/checkpoints" | tr '\n' ' ')"
+else
+  [ -e "$OUT" ] && { echo "FATAL: $OUT exists; refusing to reuse an output path (SNOWBALL_RESUME=1 to continue it)" >&2; exit 2; }
+fi
 mkdir -p $S/logs
 
 sbatch -o $S/logs/snowball-$SFT_STAGE.%j.log \
@@ -113,5 +124,5 @@ SNOWBALL_OUTPUT="$OUT",\
 SNOWBALL_RUN_ID="$RUN_ID",\
 SNOWBALL_STEPS="$STEPS",\
 SNOWBALL_SCRATCH="$S",\
-SNOWBALL_STAGE="$SFT_STAGE",SNOWBALL_LR="${SNOWBALL_LR:-}",STALL_SECONDS=900 \
+SNOWBALL_STAGE="$SFT_STAGE",SNOWBALL_LR="${SNOWBALL_LR:-}",SNOWBALL_SCHEDULE_STEPS="$SCHEDULE_STEPS",STALL_SECONDS=900 \
   $MARIN/experiments/june_tpu_67b_a2b/moe/jupiter_snowball_guarded.sbatch

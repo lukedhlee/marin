@@ -144,6 +144,11 @@ class GrugTrainerConfig:
     tail_ramp_steps: int = 0
     tail_num_docs: int | None = None
     tail_score_out: str | None = None
+    # LR-schedule horizon in steps; None => num_train_steps. Set it LONGER than num_train_steps to train the
+    # first part of a longer schedule now (e.g. one epoch of a two-epoch cosine) and resume later on the same
+    # output with a larger num_train_steps: the loop picks up this run's own checkpoint (optimizer state and
+    # step included) and the schedule continues unchanged, so the resumed run is the run you would have done.
+    schedule_steps: int | None = None
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -755,7 +760,11 @@ def run_grug_local(config: GrugRunConfig) -> None:
     if run_id is None:
         raise ValueError("trainer.id was not initialized")
 
-    optimizer = config.optimizer.build(trainer.num_train_steps)
+    schedule_steps = config.trainer.schedule_steps or trainer.num_train_steps
+    if schedule_steps < trainer.num_train_steps:
+        raise ValueError(f"schedule_steps {schedule_steps} is shorter than num_train_steps {trainer.num_train_steps}")
+    print(f"lr_schedule_steps={schedule_steps} num_train_steps={trainer.num_train_steps}", flush=True)
+    optimizer = config.optimizer.build(schedule_steps)
     watch_config = trainer.watch
     tail: TailSettings | None = None
     if config.trainer.tail_score_out is None and config.trainer.tail_fraction > 0:
