@@ -794,6 +794,12 @@ STAGES: dict[str, StageSpec] = {
         cache_shards=1, dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb", source_files=1,
         chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
+    #   rst_if          the RST rollouts alone + the same if-v2 slice (no OTA)                = the source contrast
+    "rst_if": StageSpec(
+        "conversations", "rst_if_sft_v1", "s4_rst_if", 2700, init_step=0, cache_tokens=None, cache_examples=None,
+        cache_shards=1, dataset_revision="50b7f77+dd6f34cb", source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+    ),
 }
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
