@@ -773,6 +773,27 @@ STAGES: dict[str, StageSpec] = {
         fixed_steps=None,
         optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
+    # 2026-09-20: the IssueTasks slice is built from SWE-bench test issues (255 of 500 Verified rewritten inside
+    # it), so every reportable model trains on the other three OTA slices only ("ota3"). Three corpora, one merged
+    # shard each, 1,000-row row groups, same recipe, differing only in data:
+    #   ota3_if         swesmith + superuser + tezos (v2) + the if-v2 clean slice            = the clean anchor
+    #   ota3_if_rst     + Recursive-Task-Synthesis GLM-5.3 rollouts, >= 5 turns, 1 per task  = run 3
+    #   ota3_if_rstsucc + only the reward-1 subset of those RST rows                          = run 4
+    "ota3_if": StageSpec(
+        "conversations", "ota3_if_sft_v1", "s4_ota3_if", 2700, init_step=0, cache_tokens=None, cache_examples=None,
+        cache_shards=1, dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77", source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+    ),
+    "ota3_if_rst": StageSpec(
+        "conversations", "ota3_if_rst_v1", "s4_ota3_if_rst", 2700, init_step=0, cache_tokens=None, cache_examples=None,
+        cache_shards=1, dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb", source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+    ),
+    "ota3_if_rstsucc": StageSpec(
+        "conversations", "ota3_if_rstsucc_v1", "s4_ota3_if_rstsucc", 2700, init_step=0, cache_tokens=None, cache_examples=None,
+        cache_shards=1, dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb", source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+    ),
 }
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
