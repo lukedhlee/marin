@@ -800,6 +800,19 @@ STAGES: dict[str, StageSpec] = {
         cache_shards=1, dataset_revision="50b7f77+dd6f34cb", source_files=1,
         chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
+    #   ota3_if_rst_fmt ota3_if_rst minus every trace with a malformed (non-JSON) action turn      = filter arm 1
+    #   ota3_if_rst_beh ota3_if_rst minus degenerate traces (loops, hammering, empty batches,    = filter arm 2
+    #                   repeated batches, error-dominated observations); data/rst/filter_corpus.py
+    "ota3_if_rst_fmt": StageSpec(
+        "conversations", "ota3_if_rst_fmt_v1", "s4_ota3_if_rst_fmt", 2700, init_step=0, cache_tokens=None, cache_examples=None,
+        cache_shards=1, dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb", source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+    ),
+    "ota3_if_rst_beh": StageSpec(
+        "conversations", "ota3_if_rst_beh_v1", "s4_ota3_if_rst_beh", 2700, init_step=0, cache_tokens=None, cache_examples=None,
+        cache_shards=1, dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb", source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+    ),
 }
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
