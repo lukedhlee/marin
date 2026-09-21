@@ -98,7 +98,7 @@ lr              = ${SNOWBALL_LR:-stage default}
 tail            = fraction ${SNOWBALL_TAIL_FRACTION:-0} ramp ${SNOWBALL_TAIL_RAMP:-0} ref ${SNOWBALL_TAIL_REF:-none} score_out ${SNOWBALL_TAIL_SCORE_OUT:-none}
 init            = ${INIT}   (required step ${INIT_STEP}, verified)
 cache           = ${CACHE}  (provenance verified)
-output          = ${OUT}    (fresh; optimizer/step reset by weights-only init)
+output          = ${OUT}    (resume=${SNOWBALL_RESUME:-0}; fresh = optimizer/step reset by weights-only init, resume = continue from the latest kept step)
 python          = ${PYBIN}
 nccl            = ${NCCL}
 wall            = ${WALL}
@@ -107,8 +107,12 @@ PLAN
 [ "${DRY_RUN:-0}" = "1" ] && { echo "DRY_RUN=1 -- not submitting."; exit 0; }
 if [ "${SNOWBALL_RESUME:-0}" = "1" ]; then
   [ -d "$OUT/checkpoints" ] || { echo "FATAL: SNOWBALL_RESUME=1 but no $OUT/checkpoints to resume from" >&2; exit 2; }
-  echo "resuming from the latest checkpoint under $OUT/checkpoints: $(ls "$OUT/checkpoints" | tr '\n' ' ')"
+  RESUME_STEP=$(ls "$OUT/checkpoints" | grep -oE '^step-[0-9]+$' | cut -d- -f2 | sort -n | tail -1)
+  [ -n "$RESUME_STEP" ] || { echo "FATAL: SNOWBALL_RESUME=1 but no step-N checkpoint under $OUT/checkpoints" >&2; exit 2; }
+  [ "$STEPS" -gt "$RESUME_STEP" ] || { echo "FATAL: resume target $STEPS steps does not exceed checkpoint step $RESUME_STEP" >&2; exit 2; }
+  echo "resuming from step-$RESUME_STEP under $OUT/checkpoints (kept: $(ls "$OUT/checkpoints" | tr '\n' ' ')) to $STEPS steps"
 else
+  RESUME_STEP=
   [ -e "$OUT" ] && { echo "FATAL: $OUT exists; refusing to reuse an output path (SNOWBALL_RESUME=1 to continue it)" >&2; exit 2; }
 fi
 mkdir -p $S/logs
@@ -124,5 +128,5 @@ SNOWBALL_OUTPUT="$OUT",\
 SNOWBALL_RUN_ID="$RUN_ID",\
 SNOWBALL_STEPS="$STEPS",\
 SNOWBALL_SCRATCH="$S",\
-SNOWBALL_STAGE="$SFT_STAGE",SNOWBALL_LR="${SNOWBALL_LR:-}",SNOWBALL_SCHEDULE_STEPS="$SCHEDULE_STEPS",STALL_SECONDS=900 \
+SNOWBALL_STAGE="$SFT_STAGE",SNOWBALL_LR="${SNOWBALL_LR:-}",SNOWBALL_SCHEDULE_STEPS="$SCHEDULE_STEPS",SNOWBALL_RESUME_STEP="$RESUME_STEP",STALL_SECONDS=900 \
   $MARIN/experiments/june_tpu_67b_a2b/moe/jupiter_snowball_guarded.sbatch
