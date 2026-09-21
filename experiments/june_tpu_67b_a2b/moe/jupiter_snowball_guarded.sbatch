@@ -37,6 +37,9 @@ STALL_SECONDS="${STALL_SECONDS:-900}"
 # Epoch length. Defaults to the pinned Chat contract so existing behaviour is
 # unchanged; Thinking passes the value derived from its cache.
 SNOWBALL_STEPS="${SNOWBALL_STEPS:-257}"
+# SNOWBALL_RESUME_STEP (launcher, SNOWBALL_RESUME=1): the latest kept step under $SNOWBALL_OUTPUT/checkpoints; the preflight
+# then accepts the existing output path and the trainer (load_checkpoint=None) continues from that checkpoint, optimizer
+# state and step included, on the unchanged SNOWBALL_SCHEDULE_STEPS schedule. Unset = a fresh output path is required.
 # Stage selects the turns field, dataset component, W&B tag and epoch ceiling.
 # Without it BOTH the preflight and train commands silently default to "chat"
 # and demand the 257-step Chat contract.
@@ -219,6 +222,7 @@ trap 'kill ${WATCHDOG_PID} 2>/dev/null' EXIT
   --init-checkpoint-path "${SNOWBALL_INIT}" --data-cache-path "${SNOWBALL_CACHE}" \
   --tokenizer-path "${SNOWBALL_TOKENIZER}" --output-path "${SNOWBALL_OUTPUT}" \
   --run-id "${SNOWBALL_RUN_ID}" --steps "${SNOWBALL_STEPS}" --devices "${SLURM_NTASKS}" \
+  ${SNOWBALL_RESUME_STEP:+--expected-output-checkpoint-step "${SNOWBALL_RESUME_STEP}"} \
   --stage "${SNOWBALL_STAGE}" || exit 4
 
 # ONE srun, all ${SNOWBALL_STEPS} steps. Steps 1-6 are observed, never a stopping point.
@@ -227,6 +231,7 @@ srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NTASKS}" --ntasks-per-node=4 --
     --init-checkpoint-path "${SNOWBALL_INIT}" --data-cache-path "${SNOWBALL_CACHE}" \
     --tokenizer-path "${SNOWBALL_TOKENIZER}" --output-path "${SNOWBALL_OUTPUT}" \
     --run-id "${SNOWBALL_RUN_ID}" --steps "${SNOWBALL_STEPS}" --devices "${SLURM_NTASKS}" \
+    ${SNOWBALL_RESUME_STEP:+--expected-output-checkpoint-step "${SNOWBALL_RESUME_STEP}"} \
     --stage "${SNOWBALL_STAGE}" 2>&1 | tee -a "${RUNLOG}"
 RC=${PIPESTATUS[0]}
 kill ${WATCHDOG_PID} 2>/dev/null
