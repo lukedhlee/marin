@@ -9,6 +9,7 @@ import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jax.experimental import multihost_utils
 from haliax.partitioning import set_mesh
 from levanter.checkpoint import load_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
@@ -154,6 +155,9 @@ with set_mesh(mesh):
         },
         chat_template=chat_template,
     )
+    # Every rank's save_pretrained re-serialises the tokenizer files; wait for all of them before rank 0 copies the
+    # base's over, or a late rank overwrites the copy (09-23: one export's tokenizer_config.json came out 43 bytes short).
+    multihost_utils.sync_global_devices("snowball_export_saved")
     if EXPORT_BASE is not None and jax.process_index() == 0:
         # The serving template is chat_template.jinja (written above from the base); keep the template the base
         # trained with beside it, and the base's own tokenizer files byte for byte (save_pretrained re-serialises).
