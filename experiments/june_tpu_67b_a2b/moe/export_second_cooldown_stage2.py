@@ -1,6 +1,8 @@
 import dataclasses
 import math
 import os
+import shutil
+from pathlib import Path
 from typing import Any, cast
 
 import draccus
@@ -42,6 +44,11 @@ TOKENIZER = os.environ.get("SNOWBALL_EXPORT_TOKENIZER", "marin-community/marin-t
 # 120 GB GH200. Shard over an explicit expert axis instead.
 EXPERT_AXIS = int(os.environ.get("SNOWBALL_EXPORT_EXPERT_AXIS", "1"))
 REPLICA_AXIS = os.environ.get("SNOWBALL_EXPORT_REPLICA_AXIS")
+# SNOWBALL_EXPORT_BASE: the HF dir of the base the run started from, when it is not Stage-3 (Grug Datakit 09-21).
+# The export then carries THAT base's config.json values (qk_mult, max_position_embeddings), its serving
+# chat_template.jinja and its training_chat_template.jinja; pass the same dir as SNOWBALL_EXPORT_TOKENIZER.
+# Unset = the reference values below, byte for byte.
+EXPORT_BASE = os.environ.get("SNOWBALL_EXPORT_BASE") or None
 
 qk_mult = 1.3 * (0.1 * math.log(65_536 / 8_192) + 1.0)
 model_config = dataclasses.replace(
@@ -59,6 +66,24 @@ model_dict = dataclasses.asdict(model_config)
 vendored_config = draccus.decode(VendoredGrugModelConfig, model_dict)
 main_fields = {field.name for field in dataclasses.fields(GrugModelConfig)}
 main_config = draccus.decode(GrugModelConfig, {key: value for key, value in model_dict.items() if key in main_fields})
+chat_template = MARIN_CHAT_TEMPLATE
+if EXPORT_BASE is not None:
+    from experiments.june_tpu_67b_a2b.moe.snowball_chat_recipe import read_base_hf_config
+
+    _base_cfg = read_base_hf_config(EXPORT_BASE)
+    model_config = dataclasses.replace(
+        model_config, qk_mult=float(_base_cfg["qk_mult"]), max_seq_len=int(_base_cfg["max_position_embeddings"])
+    )
+    model_dict = dataclasses.asdict(model_config)
+    vendored_config = draccus.decode(VendoredGrugModelConfig, model_dict)
+    main_config = draccus.decode(
+        GrugModelConfig, {key: value for key, value in model_dict.items() if key in main_fields}
+    )
+    chat_template = (Path(EXPORT_BASE) / "chat_template.jinja").read_text()
+    print(
+        f"EXPORT base={EXPORT_BASE} qk_mult={main_config.qk_mult} max_position_embeddings={main_config.max_seq_len}",
+        flush=True,
+    )
 
 # The reference runs under Fray/Iris, which initialises JAX distributed for it.
 # Under bare srun each task sees only its own GPU (global_device_count == 1) and
@@ -127,6 +152,18 @@ with set_mesh(mesh):
             "eos_token_id": [128001, 128009],
             "pad_token_id": 128001,
         },
-        chat_template=MARIN_CHAT_TEMPLATE,
+        chat_template=chat_template,
     )
+    if EXPORT_BASE is not None and jax.process_index() == 0:
+        # The serving template is chat_template.jinja (written above from the base); keep the template the base
+        # trained with beside it, and the base's own tokenizer files byte for byte (save_pretrained re-serialises).
+        base_files = (
+            "training_chat_template.jinja",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "special_tokens_map.json",
+        )
+        for name in base_files:
+            if (Path(EXPORT_BASE) / name).is_file():
+                shutil.copyfile(Path(EXPORT_BASE) / name, Path(OUTPUT) / name)
 print("SNOWBALL_EXPORT_OK", flush=True)

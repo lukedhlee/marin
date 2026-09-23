@@ -76,5 +76,14 @@ assert cfg.get("model_type") == "grug_moe", cfg.get("model_type")
 assert cfg.get("architectures") == ["GrugMoeForCausalLM"], cfg.get("architectures")
 assert shards, "no safetensors shards written"
 assert os.path.isfile(os.path.join(out, "chat_template.jinja")) or "chat_template" in json.load(open(os.path.join(out, "tokenizer_config.json")))
+base = os.environ.get("SNOWBALL_EXPORT_BASE")
+if base:  # a non-Stage-3 base: the export must carry that base's attention scale, context length and templates
+    bcfg = json.load(open(os.path.join(base, "config.json")))
+    for key in ("qk_mult", "max_position_embeddings"):
+        assert cfg.get(key) == bcfg.get(key), f"export {key}={cfg.get(key)} != base {key}={bcfg.get(key)}"
+    for name in ("chat_template.jinja", "training_chat_template.jinja", "tokenizer.json", "tokenizer_config.json"):
+        if os.path.isfile(os.path.join(base, name)):
+            assert open(os.path.join(out, name), "rb").read() == open(os.path.join(base, name), "rb").read(), f"{name} differs from the base's"
+    print(f"EXPORT_BASE_CHECK_OK qk_mult={cfg['qk_mult']} max_position_embeddings={cfg['max_position_embeddings']} base={base}")
 print(f"EXPORT_CHECK_OK shards={len(shards)} model_type={cfg['model_type']}")
 PYEOF

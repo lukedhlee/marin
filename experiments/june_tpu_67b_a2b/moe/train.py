@@ -149,6 +149,14 @@ class GrugTrainerConfig:
     # output with a larger num_train_steps: the loop picks up this run's own checkpoint (optimizer state and
     # step included) and the schedule continues unchanged, so the resumed run is the run you would have done.
     schedule_steps: int | None = None
+    # Keep ``pending_qb_betas`` (hence the router bias the step applies) at the init's value for the whole run
+    # instead of replacing it with each batch's QB betas. False (default) is the untouched path: the flag is a
+    # Python-level branch at trace time. For a base whose own SFT kept its biases frozen (Grug Datakit 09-21),
+    # imported with pending_qb_betas = -router_bias.
+    freeze_router_bias: bool = False
+    # Memory probe: after every step print each local device's peak / limit bytes (``PROBE_MEM`` lines), and save
+    # no checkpoint. Run with a 1-2 step budget to measure the fit of a new layout; False (default) is untouched.
+    probe_memory: bool = False
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -495,6 +503,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     tail: "TailSettings | None" = None,
+    freeze_router_bias: bool = False,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -594,7 +603,7 @@ def _make_train_step(
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
+            pending_qb_betas=state.pending_qb_betas if freeze_router_bias else metrics["qb_beta_per_layer"],
         )
 
         return next_state, metrics, watch_stats
@@ -609,6 +618,21 @@ class TailSettings:
     fraction: float
     ramp_steps: int
     ref_loss: np.ndarray  # (num_docs,) float32, NaN = never scored
+
+
+def _print_probe_memory(step: int, duration: float) -> None:
+    """One PROBE_MEM line per local device: the allocator's peak and limit (the memory-fit probe)."""
+    for device in jax.local_devices():
+        stats = device.memory_stats() or {}
+        peak = stats.get("peak_bytes_in_use", -1)
+        limit = stats.get("bytes_limit", -1)
+        print(
+            f"PROBE_MEM step={step} process={jax.process_index()} device={device.id} "
+            f"peak_gib={peak / 2**30:.2f} limit_gib={limit / 2**30:.2f} "
+            f"in_use_gib={stats.get('bytes_in_use', -1) / 2**30:.2f} "
+            f"step_s={duration:.1f}",
+            flush=True,
+        )
 
 
 def _packed_segment_ids(batch) -> jax.Array:
@@ -789,7 +813,10 @@ def run_grug_local(config: GrugRunConfig) -> None:
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
         tail=tail,
+        freeze_router_bias=config.trainer.freeze_router_bias,
     )
+    if config.trainer.freeze_router_bias:
+        logger.info("Router bias frozen at the init's pending_qb_betas for the whole run.")
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
     if config.trainer.data_seed is not None:
@@ -1001,7 +1028,9 @@ def run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
-                if checkpointer is not None:
+                if config.trainer.probe_memory:
+                    _print_probe_memory(step, duration)
+                if checkpointer is not None and not config.trainer.probe_memory:
                     checkpointer.on_step(tree=state, step=int(state.step))
         except BaseException:
             logger.exception(
@@ -1011,7 +1040,10 @@ def run_grug_local(config: GrugRunConfig) -> None:
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
-            if checkpointer is not None:
+            if config.trainer.probe_memory:
+                steps_done = int(state.step)
+                print(f"PROBE_MEM_DONE process={jax.process_index()} steps={steps_done} (no checkpoint)", flush=True)
+            elif checkpointer is not None:
                 # The loop already saved this step when it fell on a permanent-keep interval (e.g. keep every
                 # epoch with the run ending on an epoch): a second, forced save into the same step directory
                 # aborts every host in multihost_utils.assert_equal (job 1890618, 2026-09-19). Force only when

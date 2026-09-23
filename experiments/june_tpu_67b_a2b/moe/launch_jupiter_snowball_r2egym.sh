@@ -54,11 +54,12 @@ export LD_PRELOAD="$(gcc -print-file-name=libstdc++.so.6)"
 read -r STEPS EPOCH_STEPS INIT_STEP <<<"$(cd $MARIN && JAX_PLATFORMS=cpu $PYBIN - <<PY
 from experiments.june_tpu_67b_a2b.moe.vista_snowball_chat import (
     STAGES, derive_epoch_steps, read_chat_cache_tokens, validate_cache_provenance,
-    validate_native_checkpoint_layout)
+    validate_native_checkpoint_layout, validate_init_base)
 s = STAGES["$SFT_STAGE"]
 rec = validate_cache_provenance("$CACHE", "$SFT_STAGE", "$TOK")
 assert len(rec["shards"]) == s.source_files, "cache provenance shard count != pinned"
 validate_native_checkpoint_layout("$INIT", expect_step=s.init_step)
+validate_init_base("$INIT", "$SFT_STAGE")  # a stage that needs a non-Stage-3 base refuses an init without its sidecar
 epoch = derive_epoch_steps(read_chat_cache_tokens("$CACHE"))
 steps = $EPOCHS * epoch
 assert s.max_steps is None or steps <= s.max_steps, f"{steps} steps exceeds the stage ceiling {s.max_steps}"
@@ -72,6 +73,18 @@ PY
 SCHEDULE_EPOCHS=${SNOWBALL_SCHEDULE_EPOCHS:-$EPOCHS}
 [ "$SCHEDULE_EPOCHS" -ge "$EPOCHS" ] || { echo "FATAL: SNOWBALL_SCHEDULE_EPOCHS=$SCHEDULE_EPOCHS < EPOCHS=$EPOCHS" >&2; exit 3; }
 SCHEDULE_STEPS=$((SCHEDULE_EPOCHS * EPOCH_STEPS))
+# Layout knobs (snowball_chat_recipe.py reads them at import, the job inherits them through --export=ALL):
+# SNOWBALL_SEQ_LEN (packing length), SNOWBALL_BATCH (sequences per step), SNOWBALL_DEVICES (= SNOWBALL_NODES x 4
+# ranks). Unset = 32,768 x 64 on 16 nodes, the #SBATCH default of the guarded script.
+if [ -n "${SNOWBALL_NODES:-}" ]; then
+  [ "${SNOWBALL_DEVICES:-64}" -eq $((SNOWBALL_NODES * 4)) ] || { echo "FATAL: SNOWBALL_DEVICES=${SNOWBALL_DEVICES:-64} != 4 x SNOWBALL_NODES=$SNOWBALL_NODES" >&2; exit 3; }
+fi
+# SNOWBALL_PROBE_STEPS=N: the memory probe -- train N steps (1-2) at this layout, print PROBE_MEM per device, keep no
+# checkpoint. Same init / cache / schedule horizon as the real run, so the step compiles exactly as it will there.
+if [ -n "${SNOWBALL_PROBE_STEPS:-}" ]; then
+  STEPS=$SNOWBALL_PROBE_STEPS
+  export SNOWBALL_PROBE_MEMORY=1
+fi
 
 # Ask the NCCL library itself which release JAX will load (marin #7344: < 2.29.3 wedges on aarch64).
 NCCL=$($PYBIN - <<'PY' 2>/dev/null
@@ -94,6 +107,7 @@ cat <<PLAN
 stage           = ${SFT_STAGE}
 epochs          = ${EPOCHS}  (${EPOCH_STEPS} packed steps per epoch)
 steps           = ${STEPS}   (lr schedule over ${SCHEDULE_STEPS} = ${SCHEDULE_EPOCHS} epochs; resume=${SNOWBALL_RESUME:-0})
+layout          = ${SNOWBALL_BATCH:-64} x ${SNOWBALL_SEQ_LEN:-32768} tokens per step on ${SNOWBALL_NODES:-16} nodes (${SNOWBALL_DEVICES:-64} ranks); warmup ${SNOWBALL_WARMUP:-stage default}; probe_steps ${SNOWBALL_PROBE_STEPS:-none}
 lr              = ${SNOWBALL_LR:-stage default}
 tail            = fraction ${SNOWBALL_TAIL_FRACTION:-0} ramp ${SNOWBALL_TAIL_RAMP:-0} ref ${SNOWBALL_TAIL_REF:-none} score_out ${SNOWBALL_TAIL_SCORE_OUT:-none}
 init            = ${INIT}   (required step ${INIT_STEP}, verified)
@@ -118,7 +132,7 @@ fi
 mkdir -p $S/logs
 
 sbatch -o $S/logs/snowball-$SFT_STAGE.%j.log \
-  -t "$WALL" \
+  -t "$WALL" ${SNOWBALL_NODES:+-N "$SNOWBALL_NODES"} \
   -J "$RUN_ID" \
   --export=ALL,MARIN_ROOT=$MARIN,MARIN_PYTHON=$PYBIN,\
 SNOWBALL_INIT="$INIT",\
