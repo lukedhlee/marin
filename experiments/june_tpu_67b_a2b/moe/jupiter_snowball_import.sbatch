@@ -20,6 +20,10 @@
 # Four CPU ranks (JAX_PLATFORMS=cpu, one per booster node; Jupiter has no CPU-only partition, so the
 # GH200s idle for the few minutes this takes) give the importer a data axis of four. Each rank holds
 # roughly one quarter of the 134 GB source plus one quarter of the converted layout.
+#
+# A non-Stage-3 base (Grug Datakit 09-21) sets SNOWBALL_BASE_CONFIG_FROM_HF=true (qk_mult / max_position_embeddings
+# from its config.json, recorded in <init>/snowball_base.json) and SNOWBALL_PENDING_FROM_BIAS=true (pending_qb_betas
+# = -router_bias, so step 1 routes with the base's bias). Unset, both are false: the Stage-3 import, unchanged.
 
 set -euo pipefail
 
@@ -56,4 +60,6 @@ srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 --
     --expert_axis_size 1 \
     --replica_axis_size 1 \
     --model_axis_size 1 \
-    --validate_only "${SNOWBALL_VALIDATE_ONLY:-false}"
+    --validate_only "${SNOWBALL_VALIDATE_ONLY:-false}" \
+    --base_config_from_hf "${SNOWBALL_BASE_CONFIG_FROM_HF:-false}" \
+    --pending_from_router_bias "${SNOWBALL_PENDING_FROM_BIAS:-false}"

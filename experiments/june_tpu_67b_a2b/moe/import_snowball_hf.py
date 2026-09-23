@@ -8,15 +8,26 @@ The Snowball trainer uses an ``ArrayStacked`` vendored model plus a separate
 router bias and use one tensor group per layer. This importer reverses only the
 layout transformation and initializes ``pending_qb_betas`` to zero so training
 does not apply the exported bias a second time.
+
+``--base_config_from_hf true`` (the Grug Datakit 09-21 base) instead takes qk_mult and
+max_position_embeddings from the source's ``config.json`` and writes them, with the
+source's identity, into a ``snowball_base.json`` sidecar inside the output checkpoint,
+from which the trainer and the exporter build the same model config.
+``--pending_from_router_bias true`` initialises ``pending_qb_betas`` to minus the
+source's router bias, so step 1 routes with the base's own bias (the trainer applies
+``-pending`` mean-centred, the exporter writes the same) rather than with zero.
 """
 
 from __future__ import annotations
 
 import contextlib
 import dataclasses
+import hashlib
+import json
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -36,7 +47,12 @@ from experiments.grug.moe.model import GrugModelConfig as HfGrugModelConfig
 from experiments.grug.moe.model import Transformer as HfTransformer
 from experiments.grug.moe.model import grugmoe_inference_state_dict
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, Transformer
-from experiments.june_tpu_67b_a2b.moe.snowball_chat_recipe import SNOWBALL_CHAT_MODEL_CONFIG
+from experiments.june_tpu_67b_a2b.moe.snowball_chat_recipe import (
+    SNOWBALL_BASE_SIDECAR,
+    SNOWBALL_CHAT_MODEL_CONFIG,
+    read_base_hf_config,
+    snowball_model_config_for_base,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,12 +155,17 @@ def _checked_tensor(
 def snowball_from_hf_state_dict(
     template: Transformer,
     state_dict: dict[str, jax.Array],
+    *,
+    pending_from_router_bias: bool = False,
 ) -> tuple[Transformer, jax.Array]:
     """Load HF tensors into the exact vendored training pytree.
 
     Returns the imported model and a zero-valued ``pending_qb_betas`` tensor.
     The latter is intentional: the HF router-bias tensors already include the
     pending QB adjustment that existed at export time.
+
+    ``pending_from_router_bias`` returns ``-router_bias`` (float32, one row per layer)
+    instead, so the trainer's ``_apply_qb_betas`` reproduces the base's bias at step 1.
     """
     if template.stacked_blocks is None:
         raise ValueError("Snowball HF import requires use_array_stacked_blocks=True.")
@@ -320,7 +341,17 @@ def snowball_from_hf_state_dict(
             ),
         ),
     )
-    pending_qb_betas = jnp.zeros((model.config.num_layers, model.config.num_experts), dtype=jnp.float32)
+    if pending_from_router_bias:
+        template_biases = [block.mlp.router_bias for block in _unstacked_blocks(template)]
+        pending_qb_betas = -jnp.stack(
+            [
+                _checked_tensor(state_dict, f"model.layers.{i}.mlp.router.bias", bias).astype(jnp.float32)
+                for i, bias in enumerate(template_biases)
+            ],
+            axis=0,
+        )
+    else:
+        pending_qb_betas = jnp.zeros((model.config.num_layers, model.config.num_experts), dtype=jnp.float32)
     return model, pending_qb_betas
 
 
@@ -350,8 +381,21 @@ class ImportSnowballHfConfig:
     validate_only: bool = False
     """Fresh-process restore and value checks without reading the HF source."""
 
+    base_config_from_hf: bool = False
+    """Take qk_mult / max_position_embeddings from the source's config.json and record them in a
+    ``snowball_base.json`` sidecar in the output (non-Stage-3 bases). False = the Stage-3 recipe constant."""
 
-def validate_native_checkpoint(checkpoint_path: str, model_config: GrugModelConfig, mesh: jax.sharding.Mesh) -> None:
+    pending_from_router_bias: bool = False
+    """Initialise pending_qb_betas from minus the source's router bias instead of zero."""
+
+
+def validate_native_checkpoint(
+    checkpoint_path: str,
+    model_config: GrugModelConfig,
+    mesh: jax.sharding.Mesh,
+    *,
+    expect_zero_pending: bool = True,
+) -> None:
     template = eqx.filter_eval_shape(Transformer.init, model_config, key=jax.random.PRNGKey(0))
     pending_template = jax.ShapeDtypeStruct((model_config.num_layers, model_config.num_experts), jnp.float32)
     exemplar: dict[str, object] = {"params": template, "pending_qb_betas": pending_template}
@@ -385,14 +429,17 @@ def validate_native_checkpoint(checkpoint_path: str, model_config: GrugModelConf
 
     pending_qb_betas = cast(jax.Array, loaded["pending_qb_betas"])
     pending_max = float(jax.device_get(jnp.max(jnp.abs(pending_qb_betas))))
-    if pending_max != 0.0:
+    if expect_zero_pending and pending_max != 0.0:
         raise ValueError(f"Restored pending_qb_betas must be exactly zero, got max abs {pending_max}.")
+    pending_finite = bool(jax.device_get(jnp.all(jnp.isfinite(pending_qb_betas))))
+    if not expect_zero_pending and not (pending_max > 0.0 and pending_finite):
+        raise ValueError(f"pending_qb_betas should carry the base's router bias, got max abs {pending_max}.")
 
     if jax.process_index() == 0:
         print(f"parameter_count={parameter_count}")
         for name, mean_abs in metrics.items():
             print(f"{name}_mean_abs={mean_abs:.9g}")
-        print("pending_qb_betas_max_abs=0")
+        print(f"pending_qb_betas_max_abs={pending_max:.9g}")
         print("SNOWBALL_NATIVE_LOAD_OK")
 
 
@@ -400,6 +447,42 @@ def main(config: ImportSnowballHfConfig) -> None:
     start = time.monotonic()
     dtype = getattr(jnp, config.dtype)
     model_config = SNOWBALL_CHAT_MODEL_CONFIG
+    base_record: dict | None = None
+    if config.pending_from_router_bias and not config.base_config_from_hf:
+        raise ValueError("pending_from_router_bias needs base_config_from_hf (the sidecar records it for validation).")
+    if config.base_config_from_hf:
+        # The source's own attention scale / context length, not the Stage-3 constant.
+        hf_dir = str(config.hf_checkpoint)
+        base_cfg = read_base_hf_config(hf_dir)
+        model_config = snowball_model_config_for_base(base_cfg)
+        tok = Path(hf_dir) / "tokenizer.json"
+        base_record = {
+            "hf_base": hf_dir,
+            "qk_mult": float(base_cfg["qk_mult"]),
+            "max_position_embeddings": int(base_cfg["max_position_embeddings"]),
+            "config_sha256": hashlib.sha256((Path(hf_dir) / "config.json").read_bytes()).hexdigest(),
+            "tokenizer_sha256": hashlib.sha256(tok.read_bytes()).hexdigest() if tok.is_file() else None,
+            "pending_qb_betas_from_router_bias": bool(config.pending_from_router_bias),
+            "config": base_cfg,
+        }
+        logger.info(
+            "Base config from %s: qk_mult=%s max_position_embeddings=%s",
+            hf_dir,
+            base_record["qk_mult"],
+            base_record["max_position_embeddings"],
+        )
+    elif not config.validate_only and (Path(str(config.hf_checkpoint)) / "config.json").is_file():
+        # Stage-3 path: refuse a local source whose attention scale is not the recipe's, so a base like 09-21
+        # (qk_mult 1.75) cannot be imported and then trained at 1.5703 without anyone noticing.
+        src_qk = json.loads((Path(str(config.hf_checkpoint)) / "config.json").read_text()).get("qk_mult")
+        if src_qk is not None and abs(float(src_qk) - model_config.qk_mult) > 1e-6:
+            raise ValueError(
+                f"{config.hf_checkpoint}/config.json has qk_mult={src_qk}, the Stage-3 recipe has "
+                f"{model_config.qk_mult}; import this base with --base_config_from_hf true."
+            )
+    elif config.validate_only and (Path(config.output_path) / SNOWBALL_BASE_SIDECAR).is_file():
+        base_cfg = json.loads((Path(config.output_path) / SNOWBALL_BASE_SIDECAR).read_text())["config"]
+        model_config = snowball_model_config_for_base(base_cfg)
     if not model_config.use_array_stacked_blocks:
         raise ValueError("The Snowball SFT model config must use ArrayStacked blocks.")
 
@@ -414,7 +497,11 @@ def main(config: ImportSnowballHfConfig) -> None:
         )
         with set_mesh(mesh):
             if config.validate_only:
-                validate_native_checkpoint(config.output_path, model_config, mesh)
+                sidecar = Path(config.output_path) / SNOWBALL_BASE_SIDECAR
+                from_bias = sidecar.is_file() and bool(
+                    json.loads(sidecar.read_text()).get("pending_qb_betas_from_router_bias")
+                )
+                validate_native_checkpoint(config.output_path, model_config, mesh, expect_zero_pending=not from_bias)
                 return
 
             source = RepoRef.from_string(config.hf_checkpoint)
@@ -422,7 +509,9 @@ def main(config: ImportSnowballHfConfig) -> None:
             logger.info("Loading public Snowball HF tensors from %s", source)
             state_dict = converter.load_state_dict(source, dtype=dtype)
             template = eqx.filter_eval_shape(Transformer.init, model_config, key=jax.random.PRNGKey(0))
-            params, pending_qb_betas = snowball_from_hf_state_dict(template, state_dict)
+            params, pending_qb_betas = snowball_from_hf_state_dict(
+                template, state_dict, pending_from_router_bias=config.pending_from_router_bias
+            )
             jax.block_until_ready(params)
 
             manager = GlobalAsyncCheckpointManager()
@@ -434,6 +523,13 @@ def main(config: ImportSnowballHfConfig) -> None:
                 is_temporary=False,
             )
             manager.wait_until_finished()
+            if base_record is not None and jax.process_index() == 0:
+                (Path(config.output_path) / SNOWBALL_BASE_SIDECAR).write_text(
+                    json.dumps(base_record, indent=2, sort_keys=True)
+                )
+                print(f"SNOWBALL_BASE_SIDECAR qk_mult={base_record['qk_mult']} "
+                      f"max_position_embeddings={base_record['max_position_embeddings']} "
+                      f"pending_from_router_bias={base_record['pending_qb_betas_from_router_bias']}", flush=True)
     logger.info("Snowball native checkpoint committed to %s in %.1fs", config.output_path, time.monotonic() - start)
 
 

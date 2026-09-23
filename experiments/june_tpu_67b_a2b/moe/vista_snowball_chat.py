@@ -35,6 +35,12 @@ from levanter.utils.mesh import MeshConfig
 from rigging.filesystem import prefix_join
 from transformers import AutoTokenizer
 
+from experiments.june_tpu_67b_a2b.moe.grug_datakit_chat import (
+    GRUG_DATAKIT_0921_SPECIAL_IDS,
+    GRUG_DATAKIT_0921_TOKENIZER_SHA256,
+    GRUG_DATAKIT_0921_TRAINING_TEMPLATE,
+    SnowballDatakitChatFormat,
+)
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeAdamHConfig
 from experiments.june_tpu_67b_a2b.moe.snowball_chat_recipe import (
     SNOWBALL_CHAT_BATCH_SIZE,
@@ -51,6 +57,8 @@ from experiments.june_tpu_67b_a2b.moe.snowball_chat_recipe import (
     SNOWBALL_CHAT_STEPS,
     SNOWBALL_CHAT_TOKENS,
     SNOWBALL_NATIVE_PARAMETERS,
+    read_init_base_sidecar,
+    snowball_model_config_for_base,
 )
 from experiments.june_tpu_67b_a2b.moe.train import (
     GrugRunConfig,
@@ -128,6 +136,7 @@ def prepare_chat_cache(
     messages_field: str = "conversation",
     tags: tuple[str, ...] = ("wildchat_386k", "snowball_chat"),
     chat_template: str | None = None,
+    fmt: ChatLmDatasetFormat | None = None,
 ) -> int:
     """Tokenize and pack pinned Parquet shards with the Delphi V0 chat format."""
     from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize  # noqa: PLC0415
@@ -145,7 +154,7 @@ def prepare_chat_cache(
             cache_path=cache_path,
             tokenizer=tokenizer_path,
             tags=list(tags),
-            format=snowball_chat_format(messages_field=messages_field, chat_template=chat_template),
+            format=fmt or snowball_chat_format(messages_field=messages_field, chat_template=chat_template),
             max_workers=len(paths),
             worker_resources=ResourceConfig(cpu=16, ram="64g", disk="20g"),
         )
@@ -269,8 +278,7 @@ def write_cache_provenance(
     full revision, a hash of every input shard, the tokenizer hash, and the
     format identity, so preflight can prove provenance instead of inferring it.
     """
-    spec = STAGES[stage]
-    fmt = snowball_chat_format(messages_field=spec.messages_field, chat_template=spec.chat_template)
+    fmt = format_for_stage(stage)
     # Key each shard by its path relative to the shards' common root, NOT by
     # basename. The Nemotron Terminal selection holds 26 files all named
     # data_filtered.parquet in different directories; a basename key collapses
@@ -295,11 +303,7 @@ def write_cache_provenance(
         "shard_root": root,
         "shards": shards,
         "tokenizer_sha256": _sha256_file(Path(tokenizer_path) / "tokenizer.json"),
-        "format": {
-            "messages_field": fmt.messages_field,
-            "mask_user_turns": bool(fmt.mask_user_turns),
-            "chat_template_sha256": hashlib.sha256((fmt.chat_template or "").encode("utf-8")).hexdigest(),
-        },
+        "format": _format_identity(fmt),
     }
     out = Path(cache_path) / PROVENANCE_FILENAME
     out.write_text(json.dumps(record, indent=2, sort_keys=True))
@@ -318,6 +322,11 @@ def validate_cache_provenance(cache_path: str, stage: str, tokenizer_path: str) 
     rec = json.loads(path.read_text())
     if rec.get("stage") != stage:
         raise ValueError(f"Cache provenance says stage {rec.get('stage')!r}, expected {stage!r}.")
+    if spec.dataset_id is not None and rec.get("dataset_id") != spec.dataset_id:
+        # A string comparison only: the id is never resolved or fetched (the bespoke data is private and local).
+        raise ValueError(
+            f"Cache was built from dataset {rec.get('dataset_id')!r}, but {stage} pins {spec.dataset_id!r}."
+        )
     if rec.get("dataset_revision") != spec.dataset_revision:
         raise ValueError(
             f"Cache was built from dataset revision {rec.get('dataset_revision')!r}, "
@@ -328,12 +337,7 @@ def validate_cache_provenance(cache_path: str, stage: str, tokenizer_path: str) 
         raise ValueError(
             f"Cache was built with tokenizer {rec.get('tokenizer_sha256')!r}, but preflight was given {tok_sha!r}."
         )
-    fmt = snowball_chat_format(messages_field=spec.messages_field, chat_template=spec.chat_template)
-    want_fmt = {
-        "messages_field": fmt.messages_field,
-        "mask_user_turns": bool(fmt.mask_user_turns),
-        "chat_template_sha256": hashlib.sha256((fmt.chat_template or "").encode("utf-8")).hexdigest(),
-    }
+    want_fmt = _format_identity(format_for_stage(stage))
     if rec.get("format") != want_fmt:
         raise ValueError(f"Cache format identity {rec.get('format')!r} does not match {want_fmt!r}.")
     shards = rec.get("shards") or {}
@@ -428,7 +432,7 @@ def validate_chat_cache_layout(
 SNOWBALL_TOKENIZER_SHA256 = "881c9c36c359e1617afef6f7583403567931b7b4f43f6552d2b2155a131650a2"
 
 
-def _validate_tokenizer(tokenizer_path: str) -> int:
+def _validate_tokenizer(tokenizer_path: str, expect_sha256: str = SNOWBALL_TOKENIZER_SHA256) -> int:
     path = Path(tokenizer_path)
     if not path.is_absolute():
         raise ValueError(f"Snowball tokenizer path must be absolute: {tokenizer_path!r}.")
@@ -446,11 +450,16 @@ def _validate_tokenizer(tokenizer_path: str) -> int:
     if not token_ids or max(token_ids) >= vocab_size:
         raise ValueError(f"Snowball tokenizer produced invalid token IDs: {token_ids!r}.")
     fingerprint = hashlib.sha256((Path(tokenizer_path) / "tokenizer.json").read_bytes()).hexdigest()
-    if fingerprint != SNOWBALL_TOKENIZER_SHA256:
+    if fingerprint != expect_sha256:
         raise ValueError(
-            f"Tokenizer fingerprint {fingerprint} does not match the pinned Snowball tokenizer "
-            f"{SNOWBALL_TOKENIZER_SHA256}. Every stage must share one tokenizer."
+            f"Tokenizer fingerprint {fingerprint} does not match the tokenizer this stage pins "
+            f"{expect_sha256}. Every stage of a lineage must share one tokenizer."
         )
+    if expect_sha256 == GRUG_DATAKIT_0921_TOKENIZER_SHA256:
+        for token, token_id in GRUG_DATAKIT_0921_SPECIAL_IDS.items():
+            if tokenizer.convert_tokens_to_ids(token) != token_id:
+                got = tokenizer.convert_tokens_to_ids(token)
+                raise ValueError(f"09-21 tokenizer maps {token!r} to {got}, not {token_id}.")
     return vocab_size
 
 
@@ -549,7 +558,8 @@ def preflight_snowball_chat(
     if cache_shards != _spec.cache_shards:
         raise ValueError(f"{stage} cache has {cache_shards} finished shards; expected {_spec.cache_shards}.")
     validate_cache_provenance(data_cache_path, stage, tokenizer_path)
-    tokenizer_vocab_size = _validate_tokenizer(tokenizer_path)
+    tokenizer_vocab_size = _validate_tokenizer(tokenizer_path, _spec.tokenizer_sha256)
+    validate_init_base(resolved_init, stage)
 
     mesh_factor = SNOWBALL_CHAT_REPLICA_AXIS * SNOWBALL_CHAT_EXPERT_PARALLEL * SNOWBALL_CHAT_MODEL_AXIS
     if devices % mesh_factor != 0:
@@ -623,6 +633,18 @@ class StageSpec:
     # Per-stage optimizer. None keeps the Chat/Thinking AdamH at 5e-5 for the stages that trained
     # with it; the agentic stages use Ben's Stage-3 setting (marin #8225, PR #8172): both groups 5e-6.
     optimizer: GrugMoeAdamHConfig | None = None
+    # The tokenizer this stage's lineage pins (Stage-3's unless the stage starts from another base).
+    tokenizer_sha256: str = SNOWBALL_TOKENIZER_SHA256
+    # When set, the cache provenance must record exactly this dataset id (string compare, never fetched).
+    dataset_id: str | None = None
+    # Keep the router bias at the init's value for the whole run (the base was trained with frozen biases);
+    # False = the trainer re-derives it from every batch's QB betas (Stage-3 behaviour).
+    freeze_router_bias: bool = False
+    # Rows are {role, content, reasoning} turns + a row-level enable_thinking (grug_datakit_chat.py).
+    datakit_format: bool = False
+    # When set, the init must carry a snowball_base.json sidecar (import_snowball_hf --base_config_from_hf) whose
+    # tokenizer is this stage's and whose pending_qb_betas were initialised from the base's router bias.
+    requires_base_sidecar: bool = False
 
 
 # Ben's Stage-3 / agentic optimizer: the Chat AdamH config with both learning rates at 5e-6.
@@ -814,12 +836,106 @@ STAGES: dict[str, StageSpec] = {
         chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
 }
+
+# 2026-09-22: SFT of the Grug Datakit 09-21 checkpoint (grug-datakit-sft-20260921, imported with
+# import_snowball_hf --base_config_from_hf --pending_from_router_bias) on the bespoke Qwen/GLM successful
+# Terminus-2 traces. Four variants of one private corpus, built by OpenThoughts-Agent: "fold" vs "think" is how the
+# teacher's reasoning is carried, "all" vs "noglm" whether the GLM-sourced rows are kept. Rows use the 09-21 training
+# template with per-row enable_thinking (the Reasoning: /think | /nothink header) and reasoning -> reasoning_content.
+# The dataset is private and lives only on Jupiter: the id below is a provenance label compared as a string, never
+# an HF repo, and nothing in this path resolves or downloads it. 09-21 kept its router biases frozen through its own
+# SFT, so these stages freeze them too (at the init's value, i.e. 09-21's bias). lr 3e-5 / warmup 5 % are the
+# stage defaults; the launcher (bespoke_arm.sh) passes SNOWBALL_LR and SNOWBALL_WARMUP explicitly.
+BESPOKE_DATASET_ID = "private/bespoke-qwen-glm-successful-20260922"
+BESPOKE_DATASET_REVISION = "bespoke_v1"
+SNOWBALL_BESPOKE_OPTIMIZER = dataclasses.replace(
+    SNOWBALL_AGENTIC_OPTIMIZER, learning_rate=3e-5, adam_lr=3e-5, warmup=0.05
+)
+
+
+def _bespoke_stage(variant: str) -> StageSpec:
+    return StageSpec(
+        "conversations",
+        f"bespoke_{variant}_v1",
+        f"s4_bespoke_{variant}",
+        1000,
+        init_step=0,
+        cache_tokens=None,
+        cache_examples=None,
+        cache_shards=1,
+        dataset_revision=BESPOKE_DATASET_REVISION,
+        source_files=1,
+        chat_template=GRUG_DATAKIT_0921_TRAINING_TEMPLATE,
+        fixed_steps=None,
+        optimizer=SNOWBALL_BESPOKE_OPTIMIZER,
+        tokenizer_sha256=GRUG_DATAKIT_0921_TOKENIZER_SHA256,
+        dataset_id=BESPOKE_DATASET_ID,
+        freeze_router_bias=True,
+        datakit_format=True,
+        requires_base_sidecar=True,
+    )
+
+
+for _variant in ("fold_all", "fold_noglm", "think_all", "think_noglm"):
+    STAGES[f"bespoke_{_variant}"] = _bespoke_stage(_variant)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
+
+
+def format_for_stage(stage: str) -> ChatLmDatasetFormat:
+    """The dataset format a stage's cache is built and read with."""
+    spec = STAGES[stage]
+    if spec.datakit_format:
+        return SnowballDatakitChatFormat(
+            messages_field=spec.messages_field,
+            chat_template=spec.chat_template,
+            mask_user_turns=True,
+            pack=None,
+        )
+    return snowball_chat_format(messages_field=spec.messages_field, chat_template=spec.chat_template)
+
+
+def _format_identity(fmt: ChatLmDatasetFormat) -> dict:
+    ident = {
+        "messages_field": fmt.messages_field,
+        "mask_user_turns": bool(fmt.mask_user_turns),
+        "chat_template_sha256": hashlib.sha256((fmt.chat_template or "").encode("utf-8")).hexdigest(),
+    }
+    if isinstance(fmt, SnowballDatakitChatFormat):  # only the Datakit stages carry these keys
+        ident["row_adapter"] = "datakit_reasoning_enable_thinking_v1"
+        ident["reasoning_key"] = fmt.reasoning_key
+        ident["enable_thinking_field"] = fmt.enable_thinking_field
+    return ident
+
+
+def validate_init_base(init_checkpoint_path: str, stage: str) -> dict | None:
+    """Tie the init's base identity to the stage: its sidecar (if any) must match what the stage pins.
+
+    A Stage-3 init has no sidecar and keeps the recipe constants. A stage that needs a non-Stage-3 base refuses an
+    init without one -- otherwise a bespoke stage would silently train Stage-3 at the wrong attention scale, or
+    freeze a router bias the importer had zeroed.
+    """
+    spec = STAGES[stage]
+    sidecar = read_init_base_sidecar(init_checkpoint_path)
+    if sidecar is None:
+        if spec.requires_base_sidecar or spec.freeze_router_bias:
+            raise ValueError(
+                f"{stage} needs an init imported with --base_config_from_hf --pending_from_router_bias "
+                f"(no snowball_base.json in {init_checkpoint_path})."
+            )
+        return None
+    if sidecar.get("tokenizer_sha256") != spec.tokenizer_sha256:
+        raise ValueError(
+            f"init {init_checkpoint_path} was imported from a base with tokenizer {sidecar.get('tokenizer_sha256')!r}, "
+            f"but {stage} pins {spec.tokenizer_sha256!r}."
+        )
+    if spec.freeze_router_bias and not sidecar.get("pending_qb_betas_from_router_bias"):
+        raise ValueError(f"{stage} freezes the router bias, but {init_checkpoint_path} has zeroed pending_qb_betas.")
+    return sidecar
 
 
 def snowball_chat_data_config(*, cache_path: str, tokenizer_path: str, stage: str = "chat") -> LmDataConfig:
     spec = STAGES[stage]
-    fmt = snowball_chat_format(messages_field=spec.messages_field, chat_template=spec.chat_template)
+    fmt = format_for_stage(stage)
     source = UrlDatasetSourceConfig(train_urls=[], cache_dir=cache_path, format=fmt, tags=[spec.component])
     return LmDataConfig(
         tokenizer=tokenizer_path,
@@ -1026,7 +1142,14 @@ def snowball_chat_run_config(
             project="marin_moe_sft",
             name=run_id,
             group="grug-67b-a2b-sft",
-            tags=["moe", "67b_a2b", "sft", STAGES[stage].wandb_tag, "seq32768", "vista-gh200"],
+            tags=[
+                "moe",
+                "67b_a2b",
+                "sft",
+                STAGES[stage].wandb_tag,
+                f"seq{SNOWBALL_CHAT_SEQUENCE_LENGTH}",
+                "vista-gh200",
+            ],
             mode="offline",
         ),
         use_explicit_mesh_axes=True,
@@ -1051,6 +1174,31 @@ def snowball_chat_run_config(
     lr_override = os.environ.get("SNOWBALL_LR")
     if lr_override:
         optimizer = dataclasses.replace(optimizer, learning_rate=float(lr_override), adam_lr=float(lr_override))
+    # SNOWBALL_WARMUP: warmup as a fraction of the schedule ("0.05") or whole steps ("4"; must be >= 2, since 1 reads
+    # as the fraction 1.0). Unset keeps the stage optimizer's warmup.
+    warmup_override = os.environ.get("SNOWBALL_WARMUP")
+    if warmup_override:
+        warmup = float(warmup_override) if "." in warmup_override else int(warmup_override)
+        if isinstance(warmup, int) and warmup == 1:
+            raise ValueError("SNOWBALL_WARMUP=1 would mean the whole schedule (fraction 1.0); pass >= 2 steps or 0.x")
+        optimizer = dataclasses.replace(optimizer, warmup=warmup)
+    print(f"optimizer lr={optimizer.learning_rate} warmup={optimizer.warmup}", flush=True)
+    # The model config follows the init: a Stage-3 init keeps the recipe constant; an init imported from another
+    # base (snowball_base.json sidecar) takes that base's qk_mult. max_seq_len is the packing length either way.
+    base_sidecar = read_init_base_sidecar(latest_checkpoint_path(init_checkpoint_path))
+    if base_sidecar is None:
+        model_config = dataclasses.replace(SNOWBALL_CHAT_MODEL_CONFIG, max_seq_len=SNOWBALL_CHAT_SEQUENCE_LENGTH)
+    else:
+        model_config = snowball_model_config_for_base(base_sidecar["config"], max_seq_len=SNOWBALL_CHAT_SEQUENCE_LENGTH)
+    freeze_router_bias = STAGES[stage].freeze_router_bias or os.environ.get("SNOWBALL_FREEZE_ROUTER_BIAS") == "1"
+    probe_memory = os.environ.get("SNOWBALL_PROBE_MEMORY") == "1"
+    print(
+        f"model_qk_mult={model_config.qk_mult} model_max_seq_len={model_config.max_seq_len} "
+        f"base={'stage3-recipe' if base_sidecar is None else base_sidecar.get('hf_base')} "
+        f"freeze_router_bias={freeze_router_bias} batch={SNOWBALL_CHAT_BATCH_SIZE} devices={devices} "
+        f"probe_memory={probe_memory}",
+        flush=True,
+    )
     # TailSFT knobs (train.py GrugTrainerConfig, tail_filter.py), all off by default. SNOWBALL_TAIL_SCORE_OUT
     # turns the run into the forward-only reference pass over one epoch (launch with EPOCHS=1) and writes the
     # (num_docs,) .npy there; SNOWBALL_TAIL_FRACTION + SNOWBALL_TAIL_REF train the filtered objective;
@@ -1072,7 +1220,7 @@ def snowball_chat_run_config(
             f"stops early once every document has been scored."
         )
     return GrugRunConfig(
-        model=dataclasses.replace(SNOWBALL_CHAT_MODEL_CONFIG, max_seq_len=SNOWBALL_CHAT_SEQUENCE_LENGTH),
+        model=model_config,
         data=snowball_chat_data_config(cache_path=data_cache_path, tokenizer_path=tokenizer_path, stage=stage),
         resources=run_resources,
         optimizer=optimizer,
@@ -1091,6 +1239,8 @@ def snowball_chat_run_config(
             tail_num_docs=tail_num_docs,
             tail_score_out=tail_score_out,
             schedule_steps=schedule_steps,
+            freeze_router_bias=freeze_router_bias,
+            probe_memory=probe_memory,
         ),
         eval=None,
     )
@@ -1145,12 +1295,14 @@ def prepare_data_command(
     tags: str,
     expect_steps: int | None,
 ) -> None:
+    fmt = None
     if stage is not None:
         spec = STAGES[stage]
         messages_field = spec.messages_field
         chat_template = spec.chat_template
         tags = f"{spec.component},snowball_{stage}"
-        click.echo(f"stage={stage} field={messages_field} component={spec.component}")
+        fmt = format_for_stage(stage)
+        click.echo(f"stage={stage} field={messages_field} component={spec.component} format={type(fmt).__name__}")
     else:
         messages_field = messages_field or "conversation"
         chat_template = None
@@ -1163,6 +1315,7 @@ def prepare_data_command(
         messages_field=messages_field,
         tags=tuple(t for t in tags.split(",") if t),
         chat_template=chat_template,
+        fmt=fmt,
     )
     # Always DERIVE from the completed cache. Only assert when the caller states
     # an expectation -- validate_chat_epoch hardcodes the 257-step Chat contract

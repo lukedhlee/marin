@@ -8,8 +8,11 @@ import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jmp
+import optax
 import pytest
 from haliax.partitioning import set_mesh
+from levanter.data.text.examples import GrugLmExample
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.june_tpu_67b_a2b.moe.import_snowball_hf import (
@@ -18,6 +21,7 @@ from experiments.june_tpu_67b_a2b.moe.import_snowball_hf import (
     snowball_hf_state_dict,
 )
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, Transformer
+from experiments.june_tpu_67b_a2b.moe.train import GrugTrainState, _apply_qb_betas, _make_train_step
 
 
 def test_importer_cli_loads() -> None:
@@ -108,3 +112,75 @@ def test_hf_import_rejects_missing_or_unexpected_tensors() -> None:
         unexpected_state["unexpected.weight"] = jnp.zeros((1,))
         with pytest.raises(ValueError, match=r"unexpected=.*unexpected\.weight"):
             snowball_from_hf_state_dict(template, unexpected_state)
+
+
+def test_hf_import_pending_from_router_bias_reproduces_the_base_bias() -> None:
+    """--pending_from_router_bias: pending = -bias, so the trainer's -pending (mean-centred) is the base's bias."""
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1, model_axis_size=1)
+    with set_mesh(mesh):
+        source = _tiny_model()
+        hf_state = snowball_hf_state_dict(source)
+        layers, experts = source.config.num_layers, source.config.num_experts
+        bias = jax.random.normal(jax.random.PRNGKey(3), (layers, experts), dtype=jnp.float32)
+        bias = bias - jnp.mean(bias, axis=-1, keepdims=True)  # exported biases are mean-centred
+        for i in range(layers):
+            hf_state[f"model.layers.{i}.mlp.router.bias"] = bias[i]
+        template = eqx.filter_eval_shape(Transformer.init, source.config, key=jax.random.PRNGKey(1))
+
+        imported, pending = snowball_from_hf_state_dict(template, hf_state, pending_from_router_bias=True)
+        assert pending.dtype == jnp.float32 and pending.shape == (layers, experts)
+        assert jnp.allclose(pending, -bias)
+        applied = _apply_qb_betas(imported, pending).stacked_blocks.stacked.mlp.router_bias
+        assert jnp.allclose(applied, bias, atol=1e-6)
+        # the exporter's inverse: router_bias = -pending, mean-centred
+        exported = -pending - jnp.mean(-pending, axis=-1, keepdims=True)
+        assert jnp.allclose(exported, bias, atol=1e-6)
+
+        _, zero = snowball_from_hf_state_dict(template, hf_state)
+        assert not jnp.any(zero)
+
+
+def test_importer_cli_parses_base_flags() -> None:
+    config = draccus.parse(
+        ImportSnowballHfConfig,
+        args=["--hf_checkpoint", "/in", "--output_path", "/out", "--base_config_from_hf", "true",
+              "--pending_from_router_bias", "true"],
+    )
+    assert config.base_config_from_hf and config.pending_from_router_bias
+    default = draccus.parse(ImportSnowballHfConfig, args=["--hf_checkpoint", "/in", "--output_path", "/out"])
+    assert not default.base_config_from_hf and not default.pending_from_router_bias
+
+
+@pytest.mark.parametrize("freeze", [False, True])
+def test_train_step_router_bias_freeze(freeze: bool) -> None:
+    """freeze_router_bias keeps pending_qb_betas (so the applied router bias) at the init's value; off re-derives it."""
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1, model_axis_size=1)
+    with set_mesh(mesh):
+        params = _tiny_model()
+        cfg = params.config
+        pending0 = jax.random.normal(jax.random.PRNGKey(5), (cfg.num_layers, cfg.num_experts), dtype=jnp.float32)
+        optimizer = optax.sgd(1e-3)
+        state = GrugTrainState(
+            step=jnp.array(0, dtype=jnp.int32),
+            params=params,
+            opt_state=optimizer.init(params),
+            ema_params=None,
+            pending_qb_betas=pending0,
+        )
+        tokens = jax.random.randint(jax.random.PRNGKey(6), (2, cfg.max_seq_len), 0, cfg.vocab_size)
+        batch = GrugLmExample(tokens=tokens, loss_weight=jnp.ones(tokens.shape, jnp.float32))
+        step = _make_train_step(
+            optimizer,
+            jmp.get_policy("params=float32,compute=float32,output=float32"),
+            z_loss_weight=0.0,
+            ema_beta=None,
+            freeze_router_bias=freeze,
+        )
+        pending_in = jnp.array(pending0)
+        state, metrics, _ = step(state, batch)
+        state, metrics, _ = step(state, batch)
+        if freeze:
+            assert jnp.array_equal(state.pending_qb_betas, pending_in)
+        else:
+            assert jnp.array_equal(state.pending_qb_betas, metrics["qb_beta_per_layer"])
+            assert not jnp.array_equal(state.pending_qb_betas, pending_in)
