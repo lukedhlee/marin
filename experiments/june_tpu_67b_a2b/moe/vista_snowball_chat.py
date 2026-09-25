@@ -637,9 +637,11 @@ class StageSpec:
     tokenizer_sha256: str = SNOWBALL_TOKENIZER_SHA256
     # When set, the cache provenance must record exactly this dataset id (string compare, never fetched).
     dataset_id: str | None = None
-    # Keep the router bias at the init's value for the whole run (the base was trained with frozen biases);
-    # False = the trainer re-derives it from every batch's QB betas (Stage-3 behaviour).
-    freeze_router_bias: bool = False
+    # Keep the router bias at the init's value for the whole run (default for every SFT from an HF import, 2026-09-24:
+    # re-deriving it from every narrow SFT batch pulls the base's balance toward the SFT data, and the importer's zeroed
+    # accumulator routed step 1 with no bias). False = the trainer re-derives it from every batch's QB betas, the
+    # pretraining behaviour Ben's Chat/Thinking/Stage-3 recipe keeps. SNOWBALL_FREEZE_ROUTER_BIAS=0/1 overrides.
+    freeze_router_bias: bool = True
     # Rows are {role, content, reasoning} turns + a row-level enable_thinking (grug_datakit_chat.py).
     datakit_format: bool = False
     # When set, the init must carry a snowball_base.json sidecar (import_snowball_hf --base_config_from_hf) whose
@@ -665,6 +667,7 @@ STAGES: dict[str, StageSpec] = {
         source_files=5,
         chat_template=DELPHI_V0_CHAT_TEMPLATE,
         fixed_steps=None,
+        freeze_router_bias=False,
     ),
     # Thinking chains from the COMPLETED Chat stage. init_step is exact: accepting
     # "any step >= 1" let a step-3 smoke checkpoint pass the gate.
@@ -681,6 +684,7 @@ STAGES: dict[str, StageSpec] = {
         source_files=15,
         chat_template=DELPHI_V0_CHAT_TEMPLATE,
         fixed_steps=None,
+        freeze_router_bias=False,
     ),
     # Stage 3, published as laion/snowball-67b-a2b-sft-s3-nemotron-terminal-step1888.
     # Deliberately NOT modelled on Chat/Thinking: different turns column, the MARIN
@@ -698,6 +702,7 @@ STAGES: dict[str, StageSpec] = {
         cache_shards=19,
         dataset_revision="a1667c4ffdadea02a89bffe4f1bb7ca2ff19f8d9",
         source_files=29,
+        freeze_router_bias=False,
         chat_template=MARIN_CHAT_TEMPLATE,
         fixed_steps=1888,
     ),
@@ -907,6 +912,16 @@ def _format_identity(fmt: ChatLmDatasetFormat) -> dict:
     return ident
 
 
+def freeze_router_bias_for(stage: str) -> bool:
+    """The stage's router-bias policy, unless SNOWBALL_FREEZE_ROUTER_BIAS=0/1 overrides it for this run."""
+    override = os.environ.get("SNOWBALL_FREEZE_ROUTER_BIAS")
+    if override is None or override == "":
+        return STAGES[stage].freeze_router_bias
+    if override not in ("0", "1"):
+        raise ValueError(f"SNOWBALL_FREEZE_ROUTER_BIAS must be 0 or 1, got {override!r}.")
+    return override == "1"
+
+
 def validate_init_base(init_checkpoint_path: str, stage: str) -> dict | None:
     """Tie the init's base identity to the stage: its sidecar (if any) must match what the stage pins.
 
@@ -915,9 +930,10 @@ def validate_init_base(init_checkpoint_path: str, stage: str) -> dict | None:
     freeze a router bias the importer had zeroed.
     """
     spec = STAGES[stage]
+    freeze = freeze_router_bias_for(stage)
     sidecar = read_init_base_sidecar(init_checkpoint_path)
     if sidecar is None:
-        if spec.requires_base_sidecar or spec.freeze_router_bias:
+        if spec.requires_base_sidecar or freeze:
             raise ValueError(
                 f"{stage} needs an init imported with --base_config_from_hf --pending_from_router_bias "
                 f"(no snowball_base.json in {init_checkpoint_path})."
@@ -928,7 +944,7 @@ def validate_init_base(init_checkpoint_path: str, stage: str) -> dict | None:
             f"init {init_checkpoint_path} was imported from a base with tokenizer {sidecar.get('tokenizer_sha256')!r}, "
             f"but {stage} pins {spec.tokenizer_sha256!r}."
         )
-    if spec.freeze_router_bias and not sidecar.get("pending_qb_betas_from_router_bias"):
+    if freeze and not sidecar.get("pending_qb_betas_from_router_bias"):
         raise ValueError(f"{stage} freezes the router bias, but {init_checkpoint_path} has zeroed pending_qb_betas.")
     return sidecar
 
@@ -1190,7 +1206,7 @@ def snowball_chat_run_config(
         model_config = dataclasses.replace(SNOWBALL_CHAT_MODEL_CONFIG, max_seq_len=SNOWBALL_CHAT_SEQUENCE_LENGTH)
     else:
         model_config = snowball_model_config_for_base(base_sidecar["config"], max_seq_len=SNOWBALL_CHAT_SEQUENCE_LENGTH)
-    freeze_router_bias = STAGES[stage].freeze_router_bias or os.environ.get("SNOWBALL_FREEZE_ROUTER_BIAS") == "1"
+    freeze_router_bias = freeze_router_bias_for(stage)
     probe_memory = os.environ.get("SNOWBALL_PROBE_MEMORY") == "1"
     print(
         f"model_qk_mult={model_config.qk_mult} model_max_seq_len={model_config.max_seq_len} "

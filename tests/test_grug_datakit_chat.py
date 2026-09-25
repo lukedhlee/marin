@@ -103,20 +103,34 @@ def test_existing_stages_are_unchanged() -> None:
     for name, spec in STAGES.items():
         if name in BESPOKE:
             continue
-        assert not spec.datakit_format and not spec.freeze_router_bias and not spec.requires_base_sidecar
+        assert not spec.datakit_format and not spec.requires_base_sidecar
+        # Ben's recipe stages keep the per-batch bias; every SFT from an HF import freezes it (2026-09-24).
+        assert spec.freeze_router_bias == (name not in ("chat", "thinking", "nemotron_terminal"))
         assert spec.tokenizer_sha256 == SNOWBALL_TOKENIZER_SHA256 and spec.dataset_id is None
         fmt = format_for_stage(name)
         assert fmt == snowball_chat_format(messages_field=spec.messages_field, chat_template=spec.chat_template)
         assert set(_format_identity(fmt)) == {"messages_field", "mask_user_turns", "chat_template_sha256"}
 
 
-def test_init_base_sidecar_gate(tmp_path) -> None:
+def test_init_base_sidecar_gate(tmp_path, monkeypatch) -> None:
     stage3_init = tmp_path / "s3"
     stage3_init.mkdir()
     assert read_init_base_sidecar(str(stage3_init)) is None
+    # A Stage-3 stage freezes the router bias by default, so a sidecar-less (zeroed-bias) init is refused
+    # unless the run opts out of the freeze.
+    with pytest.raises(ValueError, match="base_config_from_hf"):
+        validate_init_base(str(stage3_init), "ota3_if")
+    monkeypatch.setenv("SNOWBALL_FREEZE_ROUTER_BIAS", "0")
     assert validate_init_base(str(stage3_init), "ota3_if") is None
+    monkeypatch.delenv("SNOWBALL_FREEZE_ROUTER_BIAS")
     with pytest.raises(ValueError, match="base_config_from_hf"):
         validate_init_base(str(stage3_init), "bespoke_think_all")
+    stage3_frozen = tmp_path / "s3_frozen"
+    stage3_frozen.mkdir()
+    (stage3_frozen / SNOWBALL_BASE_SIDECAR).write_text(
+        json.dumps({"config": {}, "tokenizer_sha256": SNOWBALL_TOKENIZER_SHA256, "pending_qb_betas_from_router_bias": True})
+    )
+    assert validate_init_base(str(stage3_frozen), "ota3_if") is not None
 
     init = tmp_path / "dk0921"
     init.mkdir()
