@@ -13,7 +13,9 @@ from experiments.june_tpu_67b_a2b.moe.grug_datakit_chat import (
     GRUG_DATAKIT_0921_TOKENIZER_SHA256,
     GRUG_DATAKIT_0921_TRAINING_TEMPLATE,
     GRUG_DATAKIT_0921_TRAINING_TEMPLATE_SHA256,
+    PrerenderedRowProcessor,
     SnowballDatakitChatFormat,
+    SnowballPrerenderedChatFormat,
     datakit_row_to_chat,
 )
 from experiments.june_tpu_67b_a2b.moe.snowball_chat_recipe import (
@@ -40,6 +42,7 @@ BASE_0921 = {
     "moe_intermediate_size": 1280, "shared_expert_intermediate_size": 2560, "qk_mult": 1.75,
 }
 BESPOKE = ("bespoke_fold_all", "bespoke_fold_noglm", "bespoke_think_all", "bespoke_think_noglm")
+RELAY = ("relay_relay", "relay_qwen")
 
 
 def test_template_is_the_pinned_0921_training_template() -> None:
@@ -101,7 +104,7 @@ def test_bespoke_stages() -> None:
 
 def test_existing_stages_are_unchanged() -> None:
     for name, spec in STAGES.items():
-        if name in BESPOKE:
+        if name in BESPOKE or name in RELAY:
             continue
         assert not spec.datakit_format and not spec.requires_base_sidecar
         # Ben's recipe stages keep the per-batch bias; every SFT from an HF import freezes it (2026-09-24).
@@ -143,3 +146,51 @@ def test_init_base_sidecar_gate(tmp_path, monkeypatch) -> None:
     (init / SNOWBALL_BASE_SIDECAR).write_text(json.dumps({**record, "pending_qb_betas_from_router_bias": False}))
     with pytest.raises(ValueError, match="zeroed"):
         validate_init_base(str(init), "bespoke_think_all")
+
+
+def test_relay_stages() -> None:
+    for name in RELAY:
+        spec = STAGES[name]
+        assert spec.prerendered and not spec.datakit_format and spec.freeze_router_bias and spec.requires_base_sidecar
+        assert spec.tokenizer_sha256 == GRUG_DATAKIT_0921_TOKENIZER_SHA256 and spec.init_step == 0
+        fmt = format_for_stage(name)
+        assert isinstance(fmt, SnowballPrerenderedChatFormat) and fmt.mask_user_turns
+        ident = _format_identity(fmt)
+        assert ident["row_adapter"] == "prerendered_ids_loss_v1" and ident["max_tokens"] == fmt.max_tokens
+    assert STAGES["relay_relay"].dataset_id != STAGES["relay_qwen"].dataset_id
+
+
+def _proc(max_tokens: int = 8) -> PrerenderedRowProcessor:
+    return PrerenderedRowProcessor(ids_field="ids", loss_field="loss", max_tokens=max_tokens, vocab_size=128256,
+                                   bos_id=128000)
+
+
+def test_prerendered_rows_pass_through_unchanged() -> None:
+    row = {"id": "r1", "ids": [128000, 5, 128009, 7, 128009], "loss": [0, 0, 0, 1, 1]}
+    (out,) = _proc()([row])
+    assert out["input_ids"].tolist() == row["ids"] and out["assistant_masks"].tolist() == row["loss"]
+    assert set(out) == {"input_ids", "assistant_masks"}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"ids": [128000, 5, 6], "loss": [0, 1]},  # length mismatch
+        {"ids": [128000] + [5] * 8, "loss": [0] + [1] * 8},  # over max_tokens: the packer would cut it
+        {"ids": [5, 6], "loss": [0, 1]},  # no BOS first
+        {"ids": [128000, 6], "loss": [1, 1]},  # trained BOS
+        {"ids": [128000, 6], "loss": [0, 2]},  # loss not 0/1
+        {"ids": [128000, 6], "loss": [0, 0]},  # nothing trained
+        {"ids": [128000, 128256], "loss": [0, 1]},  # outside the vocabulary
+    ],
+)
+def test_prerendered_rows_refused(bad) -> None:
+    with pytest.raises(ValueError):
+        _proc()([{"id": "bad", **bad}])
+
+
+def test_prerendered_format_keeps_the_mask() -> None:
+    with pytest.raises(ValueError, match="mask_user_turns"):
+        SnowballPrerenderedChatFormat(messages_field="ids", mask_user_turns=False).build_preprocessor(
+            type("T", (), {"__len__": lambda self: 128256, "bos_token_id": 128000})()
+        )
