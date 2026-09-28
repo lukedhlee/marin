@@ -40,6 +40,7 @@ from experiments.june_tpu_67b_a2b.moe.grug_datakit_chat import (
     GRUG_DATAKIT_0921_TOKENIZER_SHA256,
     GRUG_DATAKIT_0921_TRAINING_TEMPLATE,
     SnowballDatakitChatFormat,
+    SnowballPrerenderedChatFormat,
 )
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeAdamHConfig
 from experiments.june_tpu_67b_a2b.moe.snowball_chat_recipe import (
@@ -647,6 +648,9 @@ class StageSpec:
     # When set, the init must carry a snowball_base.json sidecar (import_snowball_hf --base_config_from_hf) whose
     # tokenizer is this stage's and whose pending_qb_betas were initialised from the base's router bias.
     requires_base_sidecar: bool = False
+    # Rows arrive rendered and masked (columns ids + loss; grug_datakit_chat.SnowballPrerenderedChatFormat): the cache
+    # copies them, nothing is re-tokenized, and chat_template is unused.
+    prerendered: bool = False
 
 
 # Ben's Stage-3 / agentic optimizer: the Chat AdamH config with both learning rates at 5e-6.
@@ -883,12 +887,59 @@ def _bespoke_stage(variant: str) -> StageSpec:
 
 for _variant in ("fold_all", "fold_noglm", "think_all", "think_noglm"):
     STAGES[f"bespoke_{_variant}"] = _bespoke_stage(_variant)
+
+# 2026-09-28: relay SFT of 09-21, two arms on the same CalibForge tasks that differ only in who played the early turns
+# (relay: 09-21 then Qwen3.8 taking over; qwen: Qwen3.8 alone). Rows are rendered by OpenThoughts-Agent
+# data/relay/sft/render.py (09-21's own chat_template.jinja, as vLLM serves it) with a per-token loss: Qwen's turns
+# trained, 09-21's turns, observations and headers masked. That mask is not a chat template's assistant mask, so the
+# rows come in as ids + loss (relay_rows_to_parquet.py) and pass through unchanged. Same init, template-free format,
+# optimizer and router-bias policy as the bespoke stages; the launcher passes SNOWBALL_LR / SNOWBALL_WARMUP.
+RELAY_DATASET_REVISION = "final_v2"
+
+
+def _relay_stage(arm: str) -> StageSpec:
+    return StageSpec(
+        "ids",
+        f"relay_{arm}_v2",
+        f"s4_relay_{arm}",
+        1000,
+        init_step=0,
+        cache_tokens=None,
+        cache_examples=None,
+        cache_shards=1,
+        dataset_revision=RELAY_DATASET_REVISION,
+        source_files=1,
+        chat_template="",
+        fixed_steps=None,
+        optimizer=SNOWBALL_BESPOKE_OPTIMIZER,
+        tokenizer_sha256=GRUG_DATAKIT_0921_TOKENIZER_SHA256,
+        dataset_id=f"private/relay-calibforge-sft-{arm}",
+        freeze_router_bias=True,
+        requires_base_sidecar=True,
+        prerendered=True,
+    )
+
+
+for _arm in ("relay", "qwen"):
+    STAGES[f"relay_{_arm}"] = _relay_stage(_arm)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
 def format_for_stage(stage: str) -> ChatLmDatasetFormat:
     """The dataset format a stage's cache is built and read with."""
     spec = STAGES[stage]
+    if spec.prerendered:
+        # max_tokens = the packing length: a longer row would be cut by the packer, so the cache refuses it, and the
+        # value is part of the format identity, so a cache built for one length is refused at another.
+        return SnowballPrerenderedChatFormat(
+            messages_field=spec.messages_field,
+            chat_template=None,
+            mask_user_turns=True,
+            pack=None,
+            ids_field="ids",
+            loss_field="loss",
+            max_tokens=SNOWBALL_CHAT_SEQUENCE_LENGTH,
+        )
     if spec.datakit_format:
         return SnowballDatakitChatFormat(
             messages_field=spec.messages_field,
@@ -905,6 +956,11 @@ def _format_identity(fmt: ChatLmDatasetFormat) -> dict:
         "mask_user_turns": bool(fmt.mask_user_turns),
         "chat_template_sha256": hashlib.sha256((fmt.chat_template or "").encode("utf-8")).hexdigest(),
     }
+    if isinstance(fmt, SnowballPrerenderedChatFormat):  # only the prerendered stages carry these keys
+        ident["row_adapter"] = "prerendered_ids_loss_v1"
+        ident["ids_field"] = fmt.ids_field
+        ident["loss_field"] = fmt.loss_field
+        ident["max_tokens"] = fmt.max_tokens
     if isinstance(fmt, SnowballDatakitChatFormat):  # only the Datakit stages carry these keys
         ident["row_adapter"] = "datakit_reasoning_enable_thinking_v1"
         ident["reasoning_key"] = fmt.reasoning_key
@@ -1144,7 +1200,8 @@ def snowball_chat_run_config(
     # sets the interval outright. Temporary time-based saves are unaffected.
     keep_every = int(os.environ.get("SNOWBALL_KEEP_EVERY") or 0)
     if not keep_every and os.environ.get("SNOWBALL_KEEP_PER_EPOCH") == "1":
-        keep_every = full_epoch_steps
+        # the launcher's epoch: SNOWBALL_EPOCH_STEPS (steps per real pass over the packs) when set
+        keep_every = int(os.environ.get("SNOWBALL_EPOCH_STEPS") or 0) or full_epoch_steps
     keep_every = keep_every or 1000
     print(f"checkpoint_keep_every={keep_every}", flush=True)
     trainer = TrainerConfig(

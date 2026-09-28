@@ -61,6 +61,12 @@ assert len(rec["shards"]) == s.source_files, "cache provenance shard count != pi
 validate_native_checkpoint_layout("$INIT", expect_step=s.init_step)
 validate_init_base("$INIT", "$SFT_STAGE")  # a stage that needs a non-Stage-3 base refuses an init without its sidecar
 epoch = derive_epoch_steps(read_chat_cache_tokens("$CACHE"))
+# SNOWBALL_EPOCH_STEPS: steps per real pass when rows pack below full sequences (relay rows fill ~75 % of 65,536, so
+# the token-derived epoch covers ~0.75 of the packs); OpenThoughts-Agent data/relay/sft/pack_epoch_steps.py counts it.
+override = "${SNOWBALL_EPOCH_STEPS:-}"
+if override:
+    assert int(override) >= epoch, f"SNOWBALL_EPOCH_STEPS={override} is below the token-derived epoch {epoch}"
+    epoch = int(override)
 steps = $EPOCHS * epoch
 assert s.max_steps is None or steps <= s.max_steps, f"{steps} steps exceeds the stage ceiling {s.max_steps}"
 print(steps, epoch, s.init_step)
@@ -105,7 +111,7 @@ esac
 
 cat <<PLAN
 stage           = ${SFT_STAGE}
-epochs          = ${EPOCHS}  (${EPOCH_STEPS} packed steps per epoch)
+epochs          = ${EPOCHS}  (${EPOCH_STEPS} packed steps per epoch; SNOWBALL_EPOCH_STEPS=${SNOWBALL_EPOCH_STEPS:-unset})
 steps           = ${STEPS}   (lr schedule over ${SCHEDULE_STEPS} = ${SCHEDULE_EPOCHS} epochs; resume=${SNOWBALL_RESUME:-0})
 layout          = ${SNOWBALL_BATCH:-64} x ${SNOWBALL_SEQ_LEN:-32768} tokens per step on ${SNOWBALL_NODES:-16} nodes (${SNOWBALL_DEVICES:-64} ranks); warmup ${SNOWBALL_WARMUP:-stage default}; probe_steps ${SNOWBALL_PROBE_STEPS:-none}
 lr              = ${SNOWBALL_LR:-stage default}
