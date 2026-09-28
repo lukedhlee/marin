@@ -42,7 +42,7 @@ BASE_0921 = {
     "moe_intermediate_size": 1280, "shared_expert_intermediate_size": 2560, "qk_mult": 1.75,
 }
 BESPOKE = ("bespoke_fold_all", "bespoke_fold_noglm", "bespoke_think_all", "bespoke_think_noglm")
-RELAY = ("relay_relay", "relay_qwen")
+RELAY = ("relay_relay", "relay_qwen", "relay_relayaf")
 
 
 def test_template_is_the_pinned_0921_training_template() -> None:
@@ -157,7 +157,7 @@ def test_relay_stages() -> None:
         assert isinstance(fmt, SnowballPrerenderedChatFormat) and fmt.mask_user_turns
         ident = _format_identity(fmt)
         assert ident["row_adapter"] == "prerendered_ids_loss_v1" and ident["max_tokens"] == fmt.max_tokens
-    assert STAGES["relay_relay"].dataset_id != STAGES["relay_qwen"].dataset_id
+    assert len({STAGES[n].dataset_id for n in RELAY}) == len(RELAY)
 
 
 def _proc(max_tokens: int = 8) -> PrerenderedRowProcessor:

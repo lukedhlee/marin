@@ -920,7 +920,10 @@ def _relay_stage(arm: str) -> StageSpec:
     )
 
 
-for _arm in ("relay", "qwen"):
+# relay = the relay arm with every 09-21 turn masked (autofixed ones too), qwen = Qwen3.8 alone, relayaf = the relay arm
+# with the autofixed 09-21 actions trained (reasoning masked). One stage per arm so the chain's per-stage markers, logs
+# and cache provenance never collide when the arms run side by side.
+for _arm in ("relay", "qwen", "relayaf"):
     STAGES[f"relay_{_arm}"] = _relay_stage(_arm)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
