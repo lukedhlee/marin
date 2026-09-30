@@ -12,7 +12,7 @@
 # Horizon geometry or environment; the Python launcher is untouched: partition debug / account CCR24067, 144 CPUs
 # per node (36 per rank at four ranks), system GCC 14 instead of modules (TACC's default nvidia/26.9 sets CC=nvc,
 # which breaks Triton/XLA host compiles), CUDA_HOME from the NVHPC 26.9 CUDA 13.3 tree, NCCL bootstrap on the IB
-# interface (ibp*), git present on compute nodes. The env is built by horizon_snowball_env.sbatch on a compute node.
+# interfaces (ib*), git present on compute nodes. The env is built by horizon_snowball_env.sbatch on a compute node.
 # Data, caches, checkpoints and logs live under SNOWBALL_SCRATCH (/scratch/11584/<user>/snowball-sft).
 
 # Jupiter (JSC) port of the Vista script of the same name. Every delta is Jupiter geometry or

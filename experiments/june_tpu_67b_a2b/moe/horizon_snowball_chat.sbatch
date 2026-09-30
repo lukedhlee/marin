@@ -12,7 +12,7 @@
 # Horizon geometry or environment; the Python launcher is untouched: partition debug / account CCR24067, 144 CPUs
 # per node (36 per rank at four ranks), system GCC 14 instead of modules (TACC's default nvidia/26.9 sets CC=nvc,
 # which breaks Triton/XLA host compiles), CUDA_HOME from the NVHPC 26.9 CUDA 13.3 tree, NCCL bootstrap on the IB
-# interface (ibp*), git present on compute nodes. The env is built by horizon_snowball_env.sbatch on a compute node.
+# interfaces (ib*), git present on compute nodes. The env is built by horizon_snowball_env.sbatch on a compute node.
 # Data, caches, checkpoints and logs live under SNOWBALL_SCRATCH (/scratch/11584/<user>/snowball-sft).
 
 # Jupiter (JSC) port of the Vista script of the same name. Every delta is Jupiter geometry or
@@ -127,7 +127,7 @@ export NCCL_IB_RETRY_CNT=13
 # ordinary NCCL collectives and does not need the device-initiated window API.
 export NCCL_WIN_ENABLE=0
 # Jupiter: bootstrap over the IB interface (the setting every working multi-node job here carries).
-export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-ibp}   # Horizon: the IB interface is ibp*
+export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-ib}   # Horizon compute nodes: ibs2, ibP2p1s0, ibP16s4, ibP18p1s0 (prefix match)
 # Vista's fabric is NVIDIA/Mellanox InfiniBand -- NCCL selects NET/IB/0/GDRDMA.
 # The previous FI_PROVIDER=efa / FI_EFA_* settings were AWS Elastic Fabric
 # Adapter knobs with no EFA device on this cluster.
