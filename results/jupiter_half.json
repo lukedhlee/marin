@@ -1,0 +1,63 @@
+{
+ "side": "jupiter",
+ "replica": "r1",
+ "commit": "767d167b7",
+ "training_code": "7db3fe6b9",
+ "slurm": {
+  "prep_job": 2120925,
+  "run_job": 2120974,
+  "run_nodes": 4,
+  "run_elapsed": "00:12:24",
+  "run_start_pt": "2026-09-29 22:58",
+  "run_end_pt": "2026-09-29 23:10",
+  "node_h_total": 0.95
+ },
+ "cache": {
+  "total_tokens": 30922127,
+  "total_elements": 2048
+ },
+ "init": "/e/data1/mmlaion/lee27/snowball-sft/experiments/snowball-base-inits/init-dk0921-step0 (reused, sidecar present)",
+ "wandb": "lukedhlee-marin/horizon-jupiter-sft-pair/snowball-kimi0921-pair-jupiter-r1",
+ "train_loss": {
+  "0": 0.378017,
+  "1": 0.364514,
+  "2": 0.357834,
+  "3": 0.35436,
+  "4": 0.333123,
+  "5": 0.33456,
+  "6": 0.329428,
+  "7": 0.330342,
+  "8": 0.307136,
+  "9": 0.299396,
+  "10": 0.293435,
+  "11": 0.311061,
+  "12": 0.288712,
+  "13": 0.316435,
+  "14": 0.292944,
+  "15": 0.301216,
+  "16": 0.306577,
+  "17": 0.303893,
+  "18": 0.29339,
+  "19": 0.294187,
+  "20": 0.287213,
+  "21": 0.289333,
+  "22": 0.288188,
+  "23": 0.285233,
+  "24": 0.280245,
+  "25": 0.304123,
+  "26": 0.271126,
+  "27": 0.298028,
+  "28": 0.289767,
+  "29": 0.278198
+ },
+ "pass_rule_readout": {
+  "delta0_H1_minus_J": -0.00065,
+  "sigma_H1_H2": 0.000535,
+  "mean_abs_delta_1_29": 0.001325,
+  "bar": 0.003,
+  "max_abs_delta_1_29": 0.004054,
+  "mean_signed_delta_1_29": -0.001325,
+  "horizon_below_jupiter_steps": "29/29",
+  "verdict": "PASS"
+ }
+}
