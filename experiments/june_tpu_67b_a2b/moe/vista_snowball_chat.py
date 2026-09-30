@@ -949,7 +949,9 @@ for _arm in ("relay", "qwen", "relayaf", "mix"):
 RELAY_HZ_DATASET_REVISION = "hz20260930"
 #   ota      OpenThoughts-Agent-SFT-100K without IssueTasks, summarization fragments, eval-overlapping and SWE-bench-repo traces
 #   kimi     the Kimi SWE-smith traces alone (ablation of akimi)
-for _arm in ("athink", "akimi", "hzrelay", "hzpass", "ota", "kimi"):
+#   allkimi  hzpass rows + Kimi SWE-smith (minus 6 bottle traces), from 09-21 (H8)
+#   acont    Horizon relay rows + Kimi, continued from arm A's step-246 export (H9)
+for _arm in ("athink", "akimi", "hzrelay", "hzpass", "ota", "kimi", "allkimi", "acont"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision=RELAY_HZ_DATASET_REVISION)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
