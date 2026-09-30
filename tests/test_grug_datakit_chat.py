@@ -42,7 +42,7 @@ BASE_0921 = {
     "moe_intermediate_size": 1280, "shared_expert_intermediate_size": 2560, "qk_mult": 1.75,
 }
 BESPOKE = ("bespoke_fold_all", "bespoke_fold_noglm", "bespoke_think_all", "bespoke_think_noglm")
-RELAY = ("relay_relay", "relay_qwen", "relay_relayaf", "relay_mix")
+RELAY = ("relay_relay", "relay_qwen", "relay_relayaf", "relay_mix", "relay_hz", "relay_hza")
 
 
 def test_template_is_the_pinned_0921_training_template() -> None:

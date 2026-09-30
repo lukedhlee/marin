@@ -922,9 +922,10 @@ def _relay_stage(arm: str) -> StageSpec:
 
 # relay = the relay arm with every 09-21 turn masked (autofixed ones too), qwen = Qwen3.8 alone, relayaf = the relay arm
 # with the autofixed 09-21 actions trained (reasoning masked), mix = the relay rows (every 09-21 turn masked) and the
-# Qwen-alone rows together (2026-09-28). One stage per arm so the chain's per-stage markers, logs
-# and cache provenance never collide when the arms run side by side.
-for _arm in ("relay", "qwen", "relayaf", "mix"):
+# Qwen-alone rows together (2026-09-28), hz = the Horizon relay rows (student arm A, CalibForge remainder, every student
+# turn masked), hza = arm A's relay rows + the Horizon rows (2026-09-29). One stage per arm so the chain's per-stage
+# markers, logs and cache provenance never collide when the arms run side by side.
+for _arm in ("relay", "qwen", "relayaf", "mix", "hz", "hza"):
     STAGES[f"relay_{_arm}"] = _relay_stage(_arm)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
