@@ -948,7 +948,8 @@ for _arm in ("relay", "qwen", "relayaf", "mix"):
 #   hzpass   the same pool without the 1:1 rule (H4: failure episodes)
 RELAY_HZ_DATASET_REVISION = "hz20260930"
 #   ota      OpenThoughts-Agent-SFT-100K without IssueTasks, summarization fragments, eval-overlapping and SWE-bench-repo traces
-for _arm in ("athink", "akimi", "hzrelay", "hzpass", "ota"):
+#   kimi     the Kimi SWE-smith traces alone (ablation of akimi)
+for _arm in ("athink", "akimi", "hzrelay", "hzpass", "ota", "kimi"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision=RELAY_HZ_DATASET_REVISION)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
