@@ -951,6 +951,13 @@ RELAY_HZ_DATASET_REVISION = "hz20260930"
 #   kimi     the Kimi SWE-smith traces alone (ablation of akimi)
 for _arm in ("athink", "akimi", "hzrelay", "hzpass", "ota", "kimi"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision=RELAY_HZ_DATASET_REVISION)
+# 2026-09-30 (Horizon, PedaGEPA stage 5): arm A's recipe, rows differ.
+#   pgc0  filtered arm A rows (leak / hunt / canary dropped, 1:1)
+#   pgc1  pgc0 + size-matched random Horizon mistake-handover rows (not judged)
+#   pgp   pgc0 + Opus-selected Horizon mistake-handover rows (real mistake + genuine recovery)
+RELAY_PG_DATASET_REVISION = "pg20260930"
+for _arm in ("pgc0", "pgc1", "pgp"):
+    STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision=RELAY_PG_DATASET_REVISION)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
