@@ -80,3 +80,12 @@ Background: on the old recipe (Stage-3 import with zeroed pending_qb_betas and a
 steps) Horizon ran a systematic ~0.010 below Jupiter against a rerun noise of 0.0009, and would fail clause 2. The
 trained models still matched on held-out NLL (0.3698 vs 0.374). This pair tests whether the frozen, non-zero bias of
 the current recipe removes that offset.
+
+## Horizon side: done (2026-09-29 23:05 PT)
+
+Both replicas ran end to end with this driver and are on W&B:
+- r1 loss 0.3774 / 0.2987 / 0.2774 at steps 0 / 9 / 29;
+- rerun noise σ = 0.00053, so the clause-2 threshold is 0.003.
+
+As a setup check for the Jupiter side, the prep log should read `cache_tokens=30922127 cache_examples=2048`, and the
+launcher plan should read `steps = 30`, `layout = 16 x 65536 ... on 4 nodes (16 ranks); warmup 2`, `lr = 3e-4`.
