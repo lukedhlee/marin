@@ -888,6 +888,20 @@ def _bespoke_stage(variant: str) -> StageSpec:
 for _variant in ("fold_all", "fold_noglm", "think_all", "think_noglm"):
     STAGES[f"bespoke_{_variant}"] = _bespoke_stage(_variant)
 
+# 2026-09-30: the Horizon <-> Jupiter SFT port pair (HORIZON_JUPITER_PAIR.md at the repo root). The current recipe on
+# public data: 09-21 base (import --base_config_from_hf --pending_from_router_bias, router bias frozen at 09-21's),
+# 09-21 training template, datakit "think" rows (reasoning -> reasoning_content, enable_thinking true). Data = 2,048
+# Kimi SWE-smith traces (OpenThoughts-Agent data/swesmith/kimi_0921_convert.py), 30 token-derived steps at 16 x 65,536;
+# the id / revision are the private HF dataset commit both clusters download (a provenance label, compared as a string).
+STAGES["kimi0921_pair"] = dataclasses.replace(
+    _bespoke_stage("think_all"),
+    component="kimi0921_pair_v1",
+    wandb_tag="s4_kimi0921_pair",
+    max_steps=30,
+    dataset_revision="2883a32db3232284bae7a65130a30ded0b696519",
+    dataset_id="lukeleeai/snowball-kimi0921-pair",
+)
+
 # 2026-09-28: relay SFT of 09-21, two arms on the same CalibForge tasks that differ only in who played the early turns
 # (relay: 09-21 then Qwen3.8 taking over; qwen: Qwen3.8 alone). Rows are rendered by OpenThoughts-Agent
 # data/relay/sft/render.py (09-21's own chat_template.jinja, as vLLM serves it) with a per-token loss: Qwen's turns
