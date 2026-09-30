@@ -940,6 +940,15 @@ def _relay_stage(arm: str) -> StageSpec:
 # and cache provenance never collide when the arms run side by side.
 for _arm in ("relay", "qwen", "relayaf", "mix"):
     STAGES[f"relay_{_arm}"] = _relay_stage(_arm)
+
+# 2026-09-30 (Horizon): relay SFT experiments on 09-21 with arm A's recipe; only the rows differ.
+#   athink   arm A's rows with every trained reasoning span over 2,048 tokens masked (H2: shorter thinking)
+#   akimi    arm A's rows + Kimi SWE-smith traces rendered to ids + loss (H3: SWE traces)
+#   hzrelay  filtered arm A rows + filtered Horizon relay rows (student = arm A), 1:1 pass/fail (H1: more relay data)
+#   hzpass   the same pool without the 1:1 rule (H4: failure episodes)
+RELAY_HZ_DATASET_REVISION = "hz20260930"
+for _arm in ("athink", "akimi", "hzrelay", "hzpass"):
+    STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision=RELAY_HZ_DATASET_REVISION)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
