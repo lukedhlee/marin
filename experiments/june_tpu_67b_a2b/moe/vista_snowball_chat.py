@@ -953,6 +953,9 @@ RELAY_HZ_DATASET_REVISION = "hz20260930"
 #   acont    Horizon relay rows + Kimi, continued from arm A's step-246 export (H9)
 for _arm in ("athink", "akimi", "hzrelay", "hzpass", "ota", "kimi", "allkimi", "acont"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision=RELAY_HZ_DATASET_REVISION)
+# all relay rows + Kimi run ~1,200 steps over 3 passes: past the relay stages' 1,000-step ceiling
+for _arm in ("allkimi", "acont"):
+    STAGES[f"relay_{_arm}"] = dataclasses.replace(STAGES[f"relay_{_arm}"], max_steps=2000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
