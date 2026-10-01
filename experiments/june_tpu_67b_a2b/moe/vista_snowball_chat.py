@@ -956,6 +956,12 @@ for _arm in ("athink", "akimi", "hzrelay", "hzpass", "ota", "kimi", "allkimi", "
 # all relay rows + Kimi run ~1,200 steps over 3 passes: past the relay stages' 1,000-step ceiling
 for _arm in ("allkimi", "acont"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(STAGES[f"relay_{_arm}"], max_steps=2000)
+# 2026-10-01 (Horizon): how much does relay help? A 2x2 on 09-21, arm A's recipe: Horizon relay rows (student = arm A)
+# vs Qwen3.8-alone rows on the same CalibForge tasks, matched per task by count and pass/fail, each with and without Kimi.
+#   mrel   matched relay rows            mqwen   matched Qwen-alone rows
+#   mrelk  matched relay rows + Kimi     mqwenk  matched Qwen-alone rows + Kimi
+for _arm in ("mrel", "mqwen", "mrelk", "mqwenk"):
+    STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="m20261001", max_steps=3000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
