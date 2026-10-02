@@ -412,7 +412,8 @@ def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypa
 
     class FakeStore:
         def write(self, data, *, can_reference_source_data_indefinitely):
-            assert can_reference_source_data_indefinitely
+            # A referenced source can be dropped silently by TensorStore 0.1.84; writes must copy.
+            assert not can_reference_source_data_indefinitely
             writes.append(np.array(data, copy=True))
             return SimpleNamespace(commit=commit_future)
 
