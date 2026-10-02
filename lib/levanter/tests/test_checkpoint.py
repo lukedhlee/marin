@@ -915,6 +915,47 @@ def test_checkpointer_force_save_uses_permanent_path_even_when_time_policy_elaps
         assert list(pathlib.Path(temporary_dir).iterdir()) == []
 
 
+def test_checkpointer_force_save_skips_step_already_saved_permanently(tmp_path):
+    permanent_path = tmp_path / "checkpoints"
+    checkpointer = Checkpointer(permanent_path, None, [CheckpointInterval(every=2, until=None)])
+    saves = []
+    save = checkpointer.save_checkpoint
+
+    def recording_save(*args, **kwargs):
+        saves.append(kwargs["step"])
+        save(*args, **kwargs)
+
+    checkpointer.save_checkpoint = recording_save
+
+    _on_step(checkpointer, 2)
+    _on_step(checkpointer, 2, force=True)
+    checkpointer.wait_until_finished()
+
+    assert saves == [2]
+    assert _get_checkpoint_steps(permanent_path) == [2]
+
+
+def test_checkpointer_force_save_makes_temporary_step_permanent(tmp_path):
+    fake_now = datetime.datetime(2021, 1, 1, 0, 0, 0)
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(
+        permanent_path,
+        timedelta(seconds=10),
+        [],
+        temporary_base_path=temporary_path,
+        dt_now_injection=lambda: fake_now,
+    )
+
+    _on_step(checkpointer, 0)
+    fake_now += timedelta(seconds=10)
+    _on_step(checkpointer, 3)
+    _on_step(checkpointer, 3, force=True)
+    checkpointer.wait_until_finished()
+
+    assert _get_checkpoint_steps(permanent_path) == [3]
+
+
 def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path):
     permanent_path = tmp_path / "checkpoints"
     temporary_path = tmp_path / "temporary"

@@ -525,6 +525,7 @@ class Checkpointer:
         self._dt_now_injection = dt_now_injection or datetime.datetime.now
         self._last_save_time = self._dt_now_injection()
         self._last_save_step = 0
+        self._last_save_permanent = False
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
         self.write_config = write_config or TensorStoreWriteConfig()
@@ -597,8 +598,9 @@ class Checkpointer:
             if not force:
                 return  # don't save checkpoint at step 0 unless forced
 
-        if step == self._last_save_step and not force:
-            # we've already saved a checkpoint at this step
+        if step == self._last_save_step and (not force or self._last_save_permanent):
+            # we've already saved a checkpoint at this step; a forced save still upgrades a temporary one, but a
+            # second write into an existing permanent step directory fails on every host
             return
 
         # two reasons we can save: time or step
@@ -787,6 +789,7 @@ class Checkpointer:
             write_config=self.write_config,
         )
         self._last_save_step = step
+        self._last_save_permanent = not is_temporary
         self._last_save_time = self._dt_now_injection()
 
     def _async_checkpoint_remover(self):
