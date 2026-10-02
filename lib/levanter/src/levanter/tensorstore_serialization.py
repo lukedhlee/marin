@@ -9,6 +9,7 @@ import ctypes
 import logging
 import math
 import os
+import socket
 import sys
 import threading
 import time
@@ -27,6 +28,7 @@ import jax.numpy as jnp
 import jax.tree_util as jtu
 import numpy as np
 import tensorstore as ts
+from jax.experimental import multihost_utils
 from jax.experimental.array_serialization import tensorstore_impl as ts_impl
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
@@ -278,12 +280,59 @@ def _tensorstore_read_context(config: TensorStoreReadConfig) -> ts.Context:
     return ts.Context(spec)
 
 
-def _tensorstore_write_context(config: TensorStoreWriteConfig) -> ts.Context:
+def _tensorstore_write_context(config: TensorStoreWriteConfig, coordinator_address: str | None = None) -> ts.Context:
     spec = ts_impl._TS_CONTEXT.spec.to_json()
     spec["cache_pool"] = {"total_bytes_limit": config.cache_pool_bytes}
     spec["cache_pool#remote"] = {"total_bytes_limit": config.cache_pool_bytes}
     spec["data_copy_concurrency"] = {"limit": config.data_copy_concurrency}
+    if coordinator_address is not None:
+        spec["ocdbt_coordinator"] = {"address": coordinator_address}
     return ts.Context(spec)
+
+
+# Process 0's OCDBT coordinator for each checkpoint being written, kept alive until that checkpoint commits.
+_OCDBT_COORDINATORS: dict[str, Any] = {}
+_COORDINATOR_ADDRESS_BYTES = 512
+
+
+def _on_shared_filesystem(checkpoint_root: str) -> bool:
+    """Whether several processes write one OCDBT database on a POSIX filesystem.
+
+    The file kvstore commits by replacing ``manifest.ocdbt`` in place under a lock, which hosts sharing Lustre, NFS
+    or GPFS cannot rely on: concurrent commits fail with stale file handles. Object stores commit with conditional
+    writes and need none of this.
+    """
+    return jax.process_count() > 1 and build_kvstore_spec(checkpoint_root)["driver"] == "file"
+
+
+def _start_ocdbt_coordinator(checkpoint_root: str) -> str:
+    """Start one OCDBT coordinator on process 0 and return its address on every process."""
+    address_bytes = np.zeros(_COORDINATOR_ADDRESS_BYTES, dtype=np.uint8)
+    if jax.process_index() == 0:
+        server = ts.ocdbt.DistributedCoordinatorServer()
+        address = f"{socket.gethostname()}:{server.port}".encode()
+        if len(address) > address_bytes.size:
+            raise ValueError(f"OCDBT coordinator address is too long: {address!r}")
+        address_bytes[: len(address)] = np.frombuffer(address, dtype=np.uint8)
+        _OCDBT_COORDINATORS[checkpoint_root] = server
+    address = np.asarray(multihost_utils.broadcast_one_to_all(address_bytes)).tobytes().rstrip(b"\0").decode()
+    if not address:
+        raise RuntimeError(f"OCDBT coordinator address broadcast for {checkpoint_root} was empty")
+    return address
+
+
+async def _initialize_numbered_ocdbt(checkpoint_root: str, coordinator_address: str) -> None:
+    """Create the database with numbered manifests before any other process opens an array in it."""
+    context = ts.Context({"ocdbt_coordinator": {"address": coordinator_address}}, parent=ts_impl._TS_CONTEXT)
+    kvstore = await ts.KvStore.open(
+        {
+            "driver": KVSTORE_DRIVER,
+            "base": build_kvstore_spec(checkpoint_root),
+            "config": {"manifest_kind": "numbered"},
+        },
+        context=context,
+    )
+    await kvstore.write(b".checkpoint_init", b"")
 
 
 @dataclass(frozen=True)
@@ -472,16 +521,20 @@ def _create_ocdbt_spec(
     array_path: str | None,
     *,
     entry: "CheckpointArray | None" = None,
+    numbered_manifest: bool = False,
 ) -> dict:
     """Build a TensorStore spec over an OCDBT kvstore.
 
     ``entry`` pins the zarr3 chunk grid, so concurrent writers never share a chunk. Reads omit
-    it and take the grid from storage.
+    it and take the grid from storage. ``numbered_manifest`` gives every commit its own immutable
+    manifest file, for writers on a shared filesystem.
     """
     spec: dict[str, Any] = {
         "driver": ARRAY_DRIVER,
         "kvstore": {"driver": KVSTORE_DRIVER, "base": build_kvstore_spec(checkpoint_root)},
     }
+    if numbered_manifest:
+        spec["kvstore"]["config"] = {"manifest_kind": "numbered"}
 
     if array_path:
         spec["kvstore"]["path"] = array_path
@@ -631,12 +684,30 @@ def tree_serialize_leaves_tensorstore(
         )
         for path, array, plan in zip(paths, arrays, plans)
     ]
-    tspecs = [_create_ocdbt_spec(checkpoint_dir, entry.path, entry=entry) for entry in entries]
+    shared_filesystem = _on_shared_filesystem(str(checkpoint_dir))
+    tspecs = [
+        _create_ocdbt_spec(checkpoint_dir, entry.path, entry=entry, numbered_manifest=shared_filesystem)
+        for entry in entries
+    ]
+    coordinator_address = _start_ocdbt_coordinator(str(checkpoint_dir)) if shared_filesystem else None
 
     if jax.process_index() == 0:
         write_manifest(
             checkpoint_dir, build_manifest(entries, array_driver=ARRAY_DRIVER, kvstore_driver=KVSTORE_DRIVER)
         )
+        if coordinator_address is not None:
+            asyncio.run(_initialize_numbered_ocdbt(str(checkpoint_dir), coordinator_address))
+    if coordinator_address is not None:
+        multihost_utils.sync_global_devices(f"ocdbt_initialized:{checkpoint_dir}")
+        user_commit_callback = commit_callback
+
+        def commit_and_stop_coordinator():
+            try:
+                user_commit_callback()
+            finally:
+                _OCDBT_COORDINATORS.pop(str(checkpoint_dir), None)
+
+        commit_callback = commit_and_stop_coordinator
 
     # Pre-charge the cross-region budget: tensorstore bypasses fsspec, so CrossRegionGuardedFS
     # never sees these bytes. No-op for a local or same-region checkpoint_dir.
@@ -662,6 +733,7 @@ def tree_serialize_leaves_tensorstore(
         commit_callback,
         on_local_commit,
         on_staged,
+        coordinator_address,
     )
 
     if debug_checkpointer:
@@ -684,6 +756,7 @@ def _serialize_arrays(
     commit_callback: Callable,
     on_local_commit: Optional[Callable[[str], None]],
     on_staged: Optional[Callable[[int], None]],
+    coordinator_address: str | None = None,
 ) -> int:
     """Write every array according to its plan and start the asynchronous commit.
 
@@ -697,7 +770,7 @@ def _serialize_arrays(
 
     # JAX's process-lifetime context accumulates caches across saves, since each save writes a
     # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
-    context = _tensorstore_write_context(config)
+    context = _tensorstore_write_context(config, coordinator_address)
     gate = HostByteBudget(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 
