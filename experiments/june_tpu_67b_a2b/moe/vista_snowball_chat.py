@@ -966,9 +966,10 @@ for _arm in ("mrel", "mqwen", "mrelk", "mqwenk"):
 # 4,392 Kimi traces, from 09-21 (~1,500 steps over 3 passes)
 STAGES["relay_allclean"] = dataclasses.replace(_relay_stage("allclean"), dataset_revision="h10_20261001", max_steps=3000)
 # 2026-10-01 (Horizon) TMax: relay (student H9) vs Qwen-alone rows on the strict TMax set (3,119 tasks, gate-filtered),
-# matched per task. t1 = H10's rows + TMax relay rows, from 09-21; t1q = the same with the matched TMax Qwen-alone rows;
-# t2 = the TMax relay rows alone, continued from the best checkpoint (H9 or H10)
-for _arm in ("t1", "t1q", "t2"):
+# matched per task. t1 = H8's rows + TMax relay rows, from 09-21; t1q = the same with the matched TMax Qwen-alone rows;
+# t2 = the TMax relay rows alone, continued from H9; t3 / t3q = the matched TMax relay / Qwen-alone rows alone, from
+# 09-21 (TMax's effect without H8's rows)
+for _arm in ("t1", "t1q", "t2", "t3", "t3q"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="tmax_20261001", max_steps=4000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
