@@ -791,7 +791,10 @@ def _serialize_arrays(
             try:
                 store = future.result()
                 target = store if region is None else store[region.index]
-                write = target.write(data, can_reference_source_data_indefinitely=True)
+                # TensorStore 0.1.84 can drop a referenced source silently: a (26, 256, 640, 1280) bf16 region of
+                # a zarr3 array reports a committed write and stores no chunk, while the same bytes as a 3D array,
+                # or the same write with a copied source, store every chunk. Let TensorStore copy the snapshot.
+                write = target.write(data, can_reference_source_data_indefinitely=False)
                 write.commit.add_done_callback(write_finished)
                 write.commit.force()
             except BaseException as error:
