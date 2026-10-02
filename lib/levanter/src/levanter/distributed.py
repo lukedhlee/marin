@@ -177,7 +177,31 @@ class LevanterSlurmCluster(clusters.SlurmCluster):
         return tasks_on_local_node
 
 
+def _split_hostlist_groups(node_list):
+    """Split a Slurm hostlist at the commas outside brackets: ``a-[1,2],b-3`` -> ``["a-[1,2]", "b-3"]``."""
+    groups, depth, current = [], 0, []
+    for char in node_list:
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+        if char == "," and depth == 0:
+            groups.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    groups.append("".join(current))
+    return [group for group in groups if group]
+
+
 def _square_brace_expand(node_list):
+    # A hostlist is a comma list of groups, each expanded on its own. Expanding the whole string as one
+    # Cartesian product turns a scattered allocation such as "c103-[008-009],c107-036" into strings that
+    # name no host.
+    return [node for group in _split_hostlist_groups(node_list) for node in _expand_hostlist_group(group)]
+
+
+def _expand_hostlist_group(node_list):
     # Find all parts of the sequence including text and number ranges
     parts = re.findall(r"(\[.*?\]|[^\[\]]+)", node_list)
 

@@ -197,3 +197,15 @@ def test_square_brace_expand():
     custom_sequence_3 = "node[1-11,21]suffix"
     expanded_nodes_3 = _square_brace_expand(custom_sequence_3)
     assert expanded_nodes_3 == [f"node{i}suffix" for i in range(1, 12)] + ["node21suffix"]
+
+
+def test_square_brace_expand_scattered_allocation():
+    assert _square_brace_expand("c103-[008-009],c107-036,c126-007") == ["c103-008", "c103-009", "c107-036", "c126-007"]
+    assert _square_brace_expand("jpbo-021-[23,29],jpbo-069-[44-45,47]") == [
+        "jpbo-021-23",
+        "jpbo-021-29",
+        "jpbo-069-44",
+        "jpbo-069-45",
+        "jpbo-069-47",
+    ]
+    assert _square_brace_expand("node1,node2") == ["node1", "node2"]
