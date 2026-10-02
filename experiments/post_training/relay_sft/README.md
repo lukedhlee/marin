@@ -26,7 +26,7 @@ pass@1 in percent, mean of 3 runs under Terminus-2 with a 65,536-token context. 
   batches pulls the expert balance toward the SFT data.
 - AdamH, LR 3e-4 for both parameter groups, 5 % linear warmup, one cosine over 3 passes over the packs, z-loss 1e-4,
   seed 0. 16 sequences of 65,536 tokens per step on 16 GPUs (4 nodes, one JAX device per Slurm rank, experts
-  sharded 8 ways): about 7 s per step on GB200 or GH200.
+  sharded 8 ways): 7.3 s per step on Horizon's GB200.
 - The importer records the base's `config.json` (`qk_mult` 1.75, `max_position_embeddings` 262,144 for 09-21) in a
   `snowball_base.json` sidecar inside the init; training and export build the model config from it.
 
