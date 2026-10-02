@@ -31,8 +31,13 @@ from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, Transformer
 
 # Files an export copies byte for byte from its base: save_pretrained re-serialises the tokenizer, and the base's
 # serving and training templates must travel with the weights.
-BASE_FILES = ("chat_template.jinja", "training_chat_template.jinja", "tokenizer.json", "tokenizer_config.json",
-              "special_tokens_map.json")
+BASE_FILES = (
+    "chat_template.jinja",
+    "training_chat_template.jinja",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+)
 GENERATION_CONFIG = {"bos_token_id": 128000, "eos_token_id": [128001, 128009], "pad_token_id": 128001}
 
 _EMBEDDING_KEYS = (
