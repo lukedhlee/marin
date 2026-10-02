@@ -971,6 +971,11 @@ STAGES["relay_allclean"] = dataclasses.replace(_relay_stage("allclean"), dataset
 # 09-21 (TMax's effect without H8's rows)
 for _arm in ("t1", "t1q", "t2", "t3", "t3q"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="tmax_20261001", max_steps=4000)
+# 2026-10-02 (Horizon) TMax relay regenerated with the neutral verify note (no "another agent" framing: leak 34 % -> 1.6 %
+# on 200 tasks, same pass rate), every clean row at most 2 per task. t4 = H8's rows + these rows, from 09-21 (vs t1);
+# t5 = these rows alone, continued from H9 (vs t2)
+for _arm in ("t4", "t5"):
+    STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="tmaxB_20261002", max_steps=6000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
