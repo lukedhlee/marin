@@ -90,6 +90,16 @@ class GrugTrainerConfig:
     behaviour where ``initialize_from`` loads the whole train state (weights + optimizer +
     step). Own-run checkpoints still take precedence, so preemption resumes normally."""
 
+    freeze_router_bias: bool = False
+    """Keep ``pending_qb_betas``, hence the router bias every step applies, at the init's value for the whole
+    run instead of replacing it with each batch's QB betas. For SFT of a base whose own fine-tuning kept its
+    router bias frozen (Grug Datakit 09-21), imported with ``pending_qb_betas = -router_bias``; re-deriving the
+    bias from narrow SFT batches pulls the base's expert balance toward the SFT data."""
+
+    schedule_steps: int | None = None
+    """Length of the learning-rate schedule; None uses ``num_train_steps``. A longer schedule trains the first
+    part of a longer run now; resuming on the same output with a larger ``num_train_steps`` continues it."""
+
 
 @dataclass(frozen=True)
 class GrugEvalConfig:
@@ -415,6 +425,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     diagnose_numerics: bool = False,
+    freeze_router_bias: bool = False,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -494,7 +505,7 @@ def _make_train_step(
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
+            pending_qb_betas=state.pending_qb_betas if freeze_router_bias else metrics["qb_beta_per_layer"],
         )
 
         return next_state, metrics, watch_stats
@@ -522,8 +533,8 @@ def _check_step_numerics(metrics: dict, step: int, diagnose_numerics: bool) -> N
         raise FloatingPointError(f"Non-finite Grug update at step {step}: {diagnostics}")
 
 
-def _run_grug_local(config: GrugRunConfig) -> None:
-    """Entry point for the grug template training loop."""
+def run_grug_local(config: GrugRunConfig) -> None:
+    """Run the grug training loop in this process; every Slurm rank of a run calls it once."""
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -532,7 +543,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if run_id is None:
         raise ValueError("trainer.id was not initialized")
 
-    optimizer = config.optimizer.build(trainer.num_train_steps)
+    schedule_steps = config.trainer.schedule_steps or trainer.num_train_steps
+    if schedule_steps < trainer.num_train_steps:
+        raise ValueError(f"schedule_steps {schedule_steps} is shorter than num_train_steps {trainer.num_train_steps}")
+    optimizer = config.optimizer.build(schedule_steps)
     watch_config = trainer.watch
     train_step = _make_train_step(
         optimizer,
@@ -541,6 +555,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
         diagnose_numerics=config.trainer.diagnose_numerics,
+        freeze_router_bias=config.trainer.freeze_router_bias,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -742,7 +757,7 @@ def run_grug(config: GrugRunConfig) -> None:
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
-        local_entrypoint=_run_grug_local,
+        local_entrypoint=run_grug_local,
         resources=config.resources,
     )
 
@@ -754,4 +769,5 @@ __all__ = [
     "GrugTrainerConfig",
     "initial_state",
     "run_grug",
+    "run_grug_local",
 ]
