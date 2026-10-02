@@ -2,8 +2,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Build the GPU env the relay SFT jobs run in: uv sync from this checkout's lock, NCCL raised to 2.30.7 (the lock's
-# 2.28.9 leaks proxy-op slots on aarch64 and wedges, marin #7344), then an import smoke.
+# Build the GPU env the relay SFT jobs run in: uv sync from this checkout's lock, then an import smoke that also
+# checks NCCL is at least 2.29.3 (older releases leak proxy-op slots on aarch64 and wedge, marin #7344).
 #
 #   Jupiter (login nodes have internet; keep the uv cache off fscratch):
 #     RELAY_CLUSTER=jupiter RELAY_ACCOUNT=<project> RELAY_ROOT=/e/data1/<group>/$USER/relay-sft bash build_env.sh
@@ -13,7 +13,6 @@
 set -euo pipefail
 : "${MARIN_ROOT:=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}"
 source "$MARIN_ROOT/experiments/post_training/relay_sft/slurm/cluster.sh"
-NCCL_VERSION=${NCCL_VERSION:-2.30.7}
 UV=${UV:-$(command -v uv || echo "$HOME/.local/bin/uv")}
 ENV_DIR=$(dirname "$(dirname "$RELAY_PYTHON")")
 
@@ -30,7 +29,6 @@ mkdir -p "$UV_CACHE_DIR"
 echo "ENV_BUILD_START env=$ENV_DIR commit=$(git rev-parse --short HEAD) $(date -u +%FT%TZ)"
 [ -x "$RELAY_PYTHON" ] || "$UV" venv --python 3.12 "$ENV_DIR"
 "$UV" sync --all-packages --extra=gpu --frozen
-"$UV" pip install --python "$RELAY_PYTHON" --no-deps "nvidia-nccl-cu13==$NCCL_VERSION"
 unset ALL_PROXY HTTPS_PROXY
 
 JAX_PLATFORMS=cpu "$RELAY_PYTHON" - <<'PY'

@@ -36,7 +36,7 @@ pass@1 in percent, mean of 3 runs under Terminus-2 with a 65,536-token context. 
 cd <marin checkout>/experiments/post_training/relay_sft/slurm
 export RELAY_CLUSTER=jupiter RELAY_ACCOUNT=<project> RELAY_ROOT=/e/data1/<group>/$USER/relay-sft
 
-bash build_env.sh                                    # login node, once: uv sync, NCCL 2.30.7, import smoke
+bash build_env.sh                                    # login node, once: uv sync from the lock, import smoke
 
 hf download open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21 --local-dir $RELAY_ROOT/models/grug-0921
 hf download laion/snowball-relay-sft-rows --repo-type dataset --local-dir $RELAY_ROOT/data/relay-sft-rows
