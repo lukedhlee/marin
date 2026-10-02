@@ -10,7 +10,9 @@ from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, Transformer
 from experiments.post_training.relay_sft.hf_conversion import (
+    changed_leaves,
     hf_state_dict,
+    leaf_abs_sums,
     native_from_hf_state_dict,
     with_router_bias_from_pending,
 )
@@ -85,3 +87,14 @@ def test_import_rejects_missing_or_unexpected_tensors(mesh):
         native_from_hf_state_dict(template, {k: v for k, v in state.items() if k != "model.embed_tokens.weight"})
     with pytest.raises(ValueError, match=r"unexpected=.*extra\.weight"):
         native_from_hf_state_dict(template, {**state, "extra.weight": jnp.zeros((1,))})
+
+
+def test_changed_leaves_flags_a_lost_chunk_but_not_reduction_noise():
+    tree = {"experts": jnp.full((4, 128), 0.5), "bias": jnp.zeros((4,))}
+    before = leaf_abs_sums(tree)
+    assert before == {"['bias']": 0.0, "['experts']": 256.0}
+    noisy = {"['bias']": 0.0, "['experts']": 256.0 * (1 + 1e-6)}
+    assert changed_leaves(before, noisy) == []
+    lost = leaf_abs_sums({"experts": tree["experts"].at[0].set(0.0), "bias": tree["bias"]})
+    assert changed_leaves(before, lost) == ["['experts']"]
+    assert changed_leaves(before, {"['bias']": 0.0}) == ["['experts']"]

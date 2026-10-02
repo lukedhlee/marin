@@ -42,6 +42,8 @@ from experiments.june_tpu_67b_a2b.moe.model import Transformer
 from experiments.june_tpu_67b_a2b.moe.train import GrugRunConfig, GrugTrainerConfig, run_grug_local
 from experiments.post_training.relay_sft import recipe
 from experiments.post_training.relay_sft.hf_conversion import (
+    changed_leaves,
+    leaf_abs_sums,
     load_hf_tensors,
     load_native,
     native_from_hf_state_dict,
@@ -336,6 +338,10 @@ def import_hf_command(hf_checkpoint: str, output_path: str, distributed: bool) -
                 raise ValueError(f"reloaded {parameter_count} parameters, expected {recipe.NATIVE_PARAMETERS}")
             if not bool(jax.device_get((reloaded_pending == pending_qb_betas).all())):
                 raise ValueError("reloaded pending_qb_betas differ from the base's router bias")
+            # A write can report success and store nothing (see tensorstore_serialization), so compare every array.
+            changed = changed_leaves(leaf_abs_sums(params), leaf_abs_sums(reloaded))
+            if changed:
+                raise ValueError(f"the saved init differs from the converted model in {changed}")
     click.echo(f"RELAY_IMPORT_OK {output_path} qk_mult={sidecar['qk_mult']} parameters={parameter_count}")
 
 

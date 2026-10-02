@@ -192,6 +192,34 @@ def with_router_bias_from_pending(model: Transformer, pending_qb_betas: jax.Arra
     return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.router_bias, model, router_bias)
 
 
+@jax.jit
+def _abs_sum(value: jax.Array) -> jax.Array:
+    return jnp.sum(jnp.abs(value), dtype=jnp.float32)
+
+
+def leaf_abs_sums(tree: Any) -> dict[str, float]:
+    """The float32 sum of |x| of every array leaf, keyed by its tree path."""
+    sums = {
+        jax.tree_util.keystr(path): _abs_sum(leaf)
+        for path, leaf in jax.tree_util.tree_leaves_with_path(tree)
+        if isinstance(leaf, jax.Array)
+    }
+    return {key: float(value) for key, value in jax.device_get(sums).items()}
+
+
+def changed_leaves(before: dict[str, float], after: dict[str, float], *, rtol: float = 1e-3) -> list[str]:
+    """Leaves whose |x| sum moved by more than ``rtol``: a chunk lost or corrupted between a save and its reload.
+
+    One zarr3 chunk of the largest array is under 1 % of it, so a lost chunk exceeds the tolerance, while a
+    different reduction order across shardings stays far inside it.
+    """
+    return sorted(
+        key
+        for key in before.keys() | after.keys()
+        if key not in before or key not in after or abs(before[key] - after[key]) > rtol * max(abs(before[key]), 1e-12)
+    )
+
+
 def hf_model_config(config: GrugModelConfig) -> HfGrugModelConfig:
     """The HF-side config with the same values (the HF config class has a subset of the native fields)."""
     values = dataclasses.asdict(config)
