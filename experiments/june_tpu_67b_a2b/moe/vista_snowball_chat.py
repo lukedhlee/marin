@@ -995,6 +995,10 @@ STAGES["relay_msasubsi"] = dataclasses.replace(_relay_stage("msasubsi"), dataset
 # msasuborch = msasub + 11,547 resolved microsoft/Orchard swe trajectories by MiniMax-M2.5 (SWE-rebench + Scale-SWE)
 # rendered as MSA rows (OTA render_orchard.py)
 STAGES["relay_msasuborch"] = dataclasses.replace(_relay_stage("msasuborch"), dataset_revision="msa_20261003", max_steps=6000)
+# msasubeff = msasub + 4,500 Open-SWE-Traces rows chosen for brevity (per task the shortest resolved trajectory, kept if
+# the eval's no-refeed view of it is <= 24k tokens; parallel calls included): same count as msasubswe, shorter
+# trajectories (MSA evals die at the 65k context, the trained models explore 100-200 commands before overflowing)
+STAGES["relay_msasubeff"] = dataclasses.replace(_relay_stage("msasubeff"), dataset_revision="msa_20261003", max_steps=6000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
