@@ -992,6 +992,9 @@ for _arm in ("msasub", "msasubswe"):
 # msasubsi = msasub + 4,785 resolved SI2CA-Training-Trajectories (Qwen3.5-122B-A10B, SWE-rebench-V2 + SWE-smith) rendered as
 # MSA rows (OTA render_si2ca.py): the SWE source vs msasubswe's Open-SWE-Traces
 STAGES["relay_msasubsi"] = dataclasses.replace(_relay_stage("msasubsi"), dataset_revision="msa_20261003", max_steps=6000)
+# msasuborch = msasub + 11,547 resolved microsoft/Orchard swe trajectories by MiniMax-M2.5 (SWE-rebench + Scale-SWE)
+# rendered as MSA rows (OTA render_orchard.py)
+STAGES["relay_msasuborch"] = dataclasses.replace(_relay_stage("msasuborch"), dataset_revision="msa_20261003", max_steps=6000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
