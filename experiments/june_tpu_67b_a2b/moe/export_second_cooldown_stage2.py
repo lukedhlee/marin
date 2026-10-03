@@ -154,6 +154,10 @@ with set_mesh(mesh):
             "pad_token_id": 128001,
         },
         chat_template=chat_template,
+        # Only rank 0 writes the tokenizer files: every rank's save_pretrained used to rewrite tokenizer_config.json
+        # (truncate + write) and then read it back to embed the chat template, so a rank could read another rank's
+        # half-written file (10-03: JSONDecodeError on an empty tokenizer_config.json, 3 exports failed).
+        save_tokenizer=jax.process_index() == 0,
     )
     # Every rank's save_pretrained re-serialises the tokenizer files; wait for all of them before rank 0 copies the
     # base's over, or a late rank overwrites the copy (09-23: one export's tokenizer_config.json came out 43 bytes short).
