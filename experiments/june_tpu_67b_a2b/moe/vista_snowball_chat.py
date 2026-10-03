@@ -976,6 +976,11 @@ for _arm in ("t1", "t1q", "t2", "t3", "t3q"):
 # t5 = these rows alone, continued from H9 (vs t2)
 for _arm in ("t4", "t5"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="tmaxB_20261002", max_steps=6000)
+# 2026-10-03 (Horizon) the relay rerun under mini-swe-agent 2.4.6 tool mode (OTA data/relay/sft/render_msa.py rows,
+# CalibForge remainder, student 09-21, Qwen3.8 teacher), from 09-21 with arm A's recipe. msarel / msaqwen = the matched
+# relay / Qwen-alone rows (same task slots and pass / fail mix); msaall = every clean relay row, at most 2 per task
+for _arm in ("msarel", "msaqwen", "msaall"):
+    STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="msa_20261003", max_steps=6000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
