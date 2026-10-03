@@ -989,6 +989,9 @@ STAGES["relay_msaallswe"] = dataclasses.replace(_relay_stage("msaallswe"), datas
 # 34 % of the clean relay rows end without a submit (747 overflow failures + 654 passes cut at the row cap before it)
 for _arm in ("msasub", "msasubswe"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="msa_20261003", max_steps=6000)
+# msasubsi = msasub + 4,785 resolved SI2CA-Training-Trajectories (Qwen3.5-122B-A10B, SWE-rebench-V2 + SWE-smith) rendered as
+# MSA rows (OTA render_si2ca.py): the SWE source vs msasubswe's Open-SWE-Traces
+STAGES["relay_msasubsi"] = dataclasses.replace(_relay_stage("msasubsi"), dataset_revision="msa_20261003", max_steps=6000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
