@@ -984,9 +984,10 @@ for _arm in ("msarel", "msaqwen", "msaall"):
 # msaallswe = msaall + 4,500 resolved nvidia/Open-SWE-Traces minisweagent qwen38_27b traces rendered as MSA rows (OTA
 # render_swe_traces.py; SWE-bench Verified excluded): the MSA counterpart of H8's relay + Kimi SWE-smith rows
 STAGES["relay_msaallswe"] = dataclasses.replace(_relay_stage("msaallswe"), dataset_revision="msa_20261003", max_steps=6000)
-# msapass / msapassswe = the same without failed episodes (passed relay rows only, s1e/s3e runs added): context overflow
-# is the main failure of the MSA evals and 19 % of msaall's rows are episodes that ran out of context
-for _arm in ("msapass", "msapassswe"):
+# msasub / msasubswe = msaall / msaallswe keeping only passed relay rows that end on a trained submit (s1e/s3e runs
+# added): the trained MSA models rarely submit (5-17 % of eval trials vs 09-21's 28-50 %) and run out of context, and
+# 34 % of the clean relay rows end without a submit (747 overflow failures + 654 passes cut at the row cap before it)
+for _arm in ("msasub", "msasubswe"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="msa_20261003", max_steps=6000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
