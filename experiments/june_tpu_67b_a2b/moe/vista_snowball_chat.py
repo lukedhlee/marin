@@ -1323,7 +1323,9 @@ def snowball_chat_run_config(
             base_path=prefix_join(output_path, "checkpoints"),
             temporary_base_path=prefix_join(output_path, "checkpoints-tmp"),
             append_run_id_to_base_path=False,
-            save_interval=timedelta(minutes=30),
+            # SNOWBALL_SAVE_INTERVAL_MIN: temporary (resume) saves; each is ~625 GB, and several runs saving every 30 min
+            # saturated Horizon's scratch on 10-04 (training stalled for an hour); runs that never resume set it high
+            save_interval=timedelta(minutes=int(os.environ.get("SNOWBALL_SAVE_INTERVAL_MIN") or 30)),
             keep=[{"every": keep_every}],
             timeout=timedelta(hours=2),
         ),
