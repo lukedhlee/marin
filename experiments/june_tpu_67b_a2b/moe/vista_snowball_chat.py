@@ -1003,6 +1003,11 @@ STAGES["relay_msasubeff"] = dataclasses.replace(_relay_stage("msasubeff"), datas
 # reasoning removed from every earlier assistant turn, <|start_think|> / <|end_think|> always trained): tests whether
 # the train / eval context mismatch causes the unclosed-think format errors
 STAGES["relay_msasubnr"] = dataclasses.replace(_relay_stage("msasubnr"), dataset_revision="msa_20261003", max_steps=6000)
+# 2026-10-04 final MSA candidates, from 09-21: msafin = submit-ending passed relay rows of CalibForge + TMax (MSA relay,
+# student 09-21, Qwen3.8 teacher) + Orchard MiniMax-M2.5 + SI2CA SWE rows (the two SWE sources that lifted 09-21 in the
+# screens); msafinnr = the same rows re-rendered to the no-refeed eval's context (nr_window.py)
+for _arm in ("msafin", "msafinnr"):
+    STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="msa_20261003", max_steps=12000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
