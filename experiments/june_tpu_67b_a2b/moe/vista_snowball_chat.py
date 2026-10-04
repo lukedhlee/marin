@@ -999,6 +999,10 @@ STAGES["relay_msasuborch"] = dataclasses.replace(_relay_stage("msasuborch"), dat
 # the eval's no-refeed view of it is <= 24k tokens; parallel calls included): same count as msasubswe, shorter
 # trajectories (MSA evals die at the 65k context, the trained models explore 100-200 commands before overflowing)
 STAGES["relay_msasubeff"] = dataclasses.replace(_relay_stage("msasubeff"), dataset_revision="msa_20261003", max_steps=6000)
+# msasubnr = msasub's rows re-rendered to the no-refeed eval's context (OTA nr_window.py, windows of 8 trained turns:
+# reasoning removed from every earlier assistant turn, <|start_think|> / <|end_think|> always trained): tests whether
+# the train / eval context mismatch causes the unclosed-think format errors
+STAGES["relay_msasubnr"] = dataclasses.replace(_relay_stage("msasubnr"), dataset_revision="msa_20261003", max_steps=6000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
