@@ -1007,7 +1007,9 @@ STAGES["relay_msasubnr"] = dataclasses.replace(_relay_stage("msasubnr"), dataset
 # student 09-21, Qwen3.8 teacher) + Orchard MiniMax-M2.5 + SI2CA SWE rows (the two SWE sources that lifted 09-21 in the
 # screens); msafinnr = the same rows re-rendered to the no-refeed eval's context (nr_window.py)
 # msaswe = msafin without any relay row (Orchard MiniMax + SI2CA only): what CalibForge + TMax relay add
-for _arm in ("msafin", "msafinnr", "msafinnr2", "msaswe"):
+# msafinmask = msafin with no loss on relay turns whose command > 2,000 chars (cmd_mask.py); msafinnv = msafin + the 4,500
+# Open-SWE-Traces rows; msafinnotmax = msafin without the TMax relay rows (CalibForge relay + Orchard + SI2CA)
+for _arm in ("msafin", "msafinnr", "msafinnr2", "msaswe", "msafinmask", "msafinnv", "msafinnotmax"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="msa_20261003", max_steps=12000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
