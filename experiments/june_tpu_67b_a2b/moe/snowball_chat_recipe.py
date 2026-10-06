@@ -24,7 +24,7 @@ SNOWBALL_CHAT_DEVICES = int(os.environ.get("SNOWBALL_DEVICES") or 64)
 SNOWBALL_CHAT_EXPERT_PARALLEL = 8
 SNOWBALL_CHAT_REPLICA_AXIS = 1
 SNOWBALL_CHAT_MODEL_AXIS = 1
-SNOWBALL_CHAT_SEED = 0
+SNOWBALL_CHAT_SEED = int(os.environ.get("SNOWBALL_SEED") or 0)  # data order + init key; 0 = every earlier run
 SNOWBALL_CHAT_MP = "params=float32,compute=bfloat16,output=bfloat16"
 SNOWBALL_NATIVE_PARAMETERS = 67_078_882_816
 

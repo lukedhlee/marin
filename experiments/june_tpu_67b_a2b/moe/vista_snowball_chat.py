@@ -1009,13 +1009,14 @@ STAGES["relay_msasubnr"] = dataclasses.replace(_relay_stage("msasubnr"), dataset
 # msaswe = msafin without any relay row (Orchard MiniMax + SI2CA only): what CalibForge + TMax relay add
 # msafinmask = msafin with no loss on relay turns whose command > 2,000 chars (cmd_mask.py); msafinnv = msafin + the 4,500
 # Open-SWE-Traces rows; msafinnotmax = msafin without the TMax relay rows (CalibForge relay + Orchard + SI2CA)
-for _arm in ("msafin", "msafinnr", "msafinnr2", "msaswe", "msafinmask", "msafinnv", "msafinnotmax", "msafinorch2", "msafineff", "msafinhint", "msafinhint2", "msafinqwen", "msafinhintf", "msafinhint3", "msafinearly", "msafinearlyh", "msafinsd", "msafinsd2", "msafinearly2"):
+for _arm in ("msafin", "msafinnr", "msafinnr2", "msaswe", "msafinmask", "msafinnv", "msafinnotmax", "msafinorch2", "msafineff", "msafinhint", "msafinhint2", "msafinqwen", "msafinhintf", "msafinhint3", "msafinearly", "msafinearlyh", "msafinsd", "msafinsd2", "msafinearly2", "msafins1"):
     # msafinhint: CalibForge relay regenerated with a teacher-only context-economy hint replaces the old CalibForge rows; msafinhint2: msafin + those rows
     # msafinqwen: Qwen-alone CalibForge passes ending on a submit (control arm rows) replace the CalibForge relay rows
     # msafinhintf: hint CalibForge rows on every task (+ tmaxsub + SWE); msafinhint3: hint CalibForge + hint TMax + SWE;
     # msafinearly / msafinearlyh: early-takeover (16k) hint relay on CalibForge + TMax (+ SWE; h = plus the 32k hint rows);
     # msafinsd / msafinsd2: msafin + msafin's own shortest passing submit-ending MSA runs (self-distillation; 2 = replaces relay)
     # msafinearly2: early-takeover (16k) hint relay on both CalibForge and TMax + SWE
+    # msafins1: msafin's exact rows with SNOWBALL_SEED=1 (training-noise replicate)
     # msafineff: msafin with fewer tokens per solve (rows with any observation > 4k tokens dropped; Orchard shorter of 2 samples)
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="msa_20261003", max_steps=12000)
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
