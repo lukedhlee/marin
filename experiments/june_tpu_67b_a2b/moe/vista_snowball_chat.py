@@ -811,38 +811,98 @@ STAGES: dict[str, StageSpec] = {
     #   ota3_if_rst     + Recursive-Task-Synthesis GLM-5.3 rollouts, >= 5 turns, 1 per task  = run 3
     #   ota3_if_rstsucc + only the reward-1 subset of those RST rows                          = run 4
     "ota3_if": StageSpec(
-        "conversations", "ota3_if_sft_v1", "s4_ota3_if", 2700, init_step=0, cache_tokens=None, cache_examples=None,
-        cache_shards=1, dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77", source_files=1,
-        chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+        "conversations",
+        "ota3_if_sft_v1",
+        "s4_ota3_if",
+        2700,
+        init_step=0,
+        cache_tokens=None,
+        cache_examples=None,
+        cache_shards=1,
+        dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77",
+        source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        fixed_steps=None,
+        optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
     "ota3_if_rst": StageSpec(
-        "conversations", "ota3_if_rst_v1", "s4_ota3_if_rst", 2700, init_step=0, cache_tokens=None, cache_examples=None,
-        cache_shards=1, dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb", source_files=1,
-        chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+        "conversations",
+        "ota3_if_rst_v1",
+        "s4_ota3_if_rst",
+        2700,
+        init_step=0,
+        cache_tokens=None,
+        cache_examples=None,
+        cache_shards=1,
+        dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb",
+        source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        fixed_steps=None,
+        optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
     "ota3_if_rstsucc": StageSpec(
-        "conversations", "ota3_if_rstsucc_v1", "s4_ota3_if_rstsucc", 2700, init_step=0, cache_tokens=None, cache_examples=None,
-        cache_shards=1, dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb", source_files=1,
-        chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+        "conversations",
+        "ota3_if_rstsucc_v1",
+        "s4_ota3_if_rstsucc",
+        2700,
+        init_step=0,
+        cache_tokens=None,
+        cache_examples=None,
+        cache_shards=1,
+        dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb",
+        source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        fixed_steps=None,
+        optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
     #   rst_if          the RST rollouts alone + the same if-v2 slice (no OTA)                = the source contrast
     "rst_if": StageSpec(
-        "conversations", "rst_if_sft_v1", "s4_rst_if", 2700, init_step=0, cache_tokens=None, cache_examples=None,
-        cache_shards=1, dataset_revision="50b7f77+dd6f34cb", source_files=1,
-        chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+        "conversations",
+        "rst_if_sft_v1",
+        "s4_rst_if",
+        2700,
+        init_step=0,
+        cache_tokens=None,
+        cache_examples=None,
+        cache_shards=1,
+        dataset_revision="50b7f77+dd6f34cb",
+        source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        fixed_steps=None,
+        optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
     #   ota3_if_rst_fmt ota3_if_rst minus every trace with a malformed (non-JSON) action turn      = filter arm 1
     #   ota3_if_rst_beh ota3_if_rst minus degenerate traces (loops, hammering, empty batches,    = filter arm 2
     #                   repeated batches, error-dominated observations); data/rst/filter_corpus.py
     "ota3_if_rst_fmt": StageSpec(
-        "conversations", "ota3_if_rst_fmt_v1", "s4_ota3_if_rst_fmt", 2700, init_step=0, cache_tokens=None, cache_examples=None,
-        cache_shards=1, dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb", source_files=1,
-        chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+        "conversations",
+        "ota3_if_rst_fmt_v1",
+        "s4_ota3_if_rst_fmt",
+        2700,
+        init_step=0,
+        cache_tokens=None,
+        cache_examples=None,
+        cache_shards=1,
+        dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb",
+        source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        fixed_steps=None,
+        optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
     "ota3_if_rst_beh": StageSpec(
-        "conversations", "ota3_if_rst_beh_v1", "s4_ota3_if_rst_beh", 2700, init_step=0, cache_tokens=None, cache_examples=None,
-        cache_shards=1, dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb", source_files=1,
-        chat_template=MARIN_CHAT_TEMPLATE, fixed_steps=None, optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
+        "conversations",
+        "ota3_if_rst_beh_v1",
+        "s4_ota3_if_rst_beh",
+        2700,
+        init_step=0,
+        cache_tokens=None,
+        cache_examples=None,
+        cache_shards=1,
+        dataset_revision="45fb28fcc38d352133cb28a1c8a43a2f14fea97b+50b7f77+dd6f34cb",
+        source_files=1,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        fixed_steps=None,
+        optimizer=SNOWBALL_AGENTIC_OPTIMIZER,
     ),
 }
 
@@ -947,7 +1007,8 @@ for _arm in ("relay", "qwen", "relayaf", "mix"):
 #   hzrelay  filtered arm A rows + filtered Horizon relay rows (student = arm A), 1:1 pass/fail (H1: more relay data)
 #   hzpass   the same pool without the 1:1 rule (H4: failure episodes)
 RELAY_HZ_DATASET_REVISION = "hz20260930"
-#   ota      OpenThoughts-Agent-SFT-100K without IssueTasks, summarization fragments, eval-overlapping and SWE-bench-repo traces
+# ota      OpenThoughts-Agent-SFT-100K without IssueTasks, summarization fragments, eval-overlapping and SWE-bench-repo
+# traces
 #   kimi     the Kimi SWE-smith traces alone (ablation of akimi)
 #   allkimi  hzpass rows + Kimi SWE-smith (minus 6 bottle traces), from 09-21 (H8)
 #   acont    Horizon relay rows + Kimi, continued from arm A's step-246 export (H9)
@@ -957,7 +1018,8 @@ for _arm in ("athink", "akimi", "hzrelay", "hzpass", "ota", "kimi", "allkimi", "
 for _arm in ("allkimi", "acont"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(STAGES[f"relay_{_arm}"], max_steps=2000)
 # 2026-10-01 (Horizon): how much does relay help? A 2x2 on 09-21, arm A's recipe: Horizon relay rows (student = arm A)
-# vs Qwen3.8-alone rows on the same CalibForge tasks, matched per task by count and pass/fail, each with and without Kimi.
+# vs Qwen3.8-alone rows on the same CalibForge tasks, matched per task by count and pass/fail, each with and without
+# Kimi.
 #   mrel   matched relay rows            mqwen   matched Qwen-alone rows
 #   mrelk  matched relay rows + Kimi     mqwenk  matched Qwen-alone rows + Kimi
 for _arm in ("mrel", "mqwen", "mrelk", "mqwenk"):
@@ -971,7 +1033,8 @@ STAGES["relay_allclean"] = dataclasses.replace(_relay_stage("allclean"), dataset
 # 09-21 (TMax's effect without H8's rows)
 for _arm in ("t1", "t1q", "t2", "t3", "t3q"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="tmax_20261001", max_steps=4000)
-# 2026-10-02 (Horizon) TMax relay regenerated with the neutral verify note (no "another agent" framing: leak 34 % -> 1.6 %
+# 2026-10-02 (Horizon) TMax relay regenerated with the neutral verify note (no "another agent" framing: leak 34 % -> 1.6
+# %
 # on 200 tasks, same pass rate), every clean row at most 2 per task. t4 = H8's rows + these rows, from 09-21 (vs t1);
 # t5 = these rows alone, continued from H9 (vs t2)
 for _arm in ("t4", "t5"):
@@ -983,22 +1046,29 @@ for _arm in ("msarel", "msaqwen", "msaall"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="msa_20261003", max_steps=6000)
 # msaallswe = msaall + 4,500 resolved nvidia/Open-SWE-Traces minisweagent qwen38_27b traces rendered as MSA rows (OTA
 # render_swe_traces.py; SWE-bench Verified excluded): the MSA counterpart of H8's relay + Kimi SWE-smith rows
-STAGES["relay_msaallswe"] = dataclasses.replace(_relay_stage("msaallswe"), dataset_revision="msa_20261003", max_steps=6000)
+STAGES["relay_msaallswe"] = dataclasses.replace(
+    _relay_stage("msaallswe"), dataset_revision="msa_20261003", max_steps=6000
+)
 # msasub / msasubswe = msaall / msaallswe keeping only passed relay rows that end on a trained submit (s1e/s3e runs
 # added): the trained MSA models rarely submit (5-17 % of eval trials vs 09-21's 28-50 %) and run out of context, and
 # 34 % of the clean relay rows end without a submit (747 overflow failures + 654 passes cut at the row cap before it)
 for _arm in ("msasub", "msasubswe"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="msa_20261003", max_steps=6000)
-# msasubsi = msasub + 4,785 resolved SI2CA-Training-Trajectories (Qwen3.5-122B-A10B, SWE-rebench-V2 + SWE-smith) rendered as
+# msasubsi = msasub + 4,785 resolved SI2CA-Training-Trajectories (Qwen3.5-122B-A10B, SWE-rebench-V2 + SWE-smith) rendered
+# as
 # MSA rows (OTA render_si2ca.py): the SWE source vs msasubswe's Open-SWE-Traces
 STAGES["relay_msasubsi"] = dataclasses.replace(_relay_stage("msasubsi"), dataset_revision="msa_20261003", max_steps=6000)
 # msasuborch = msasub + 11,547 resolved microsoft/Orchard swe trajectories by MiniMax-M2.5 (SWE-rebench + Scale-SWE)
 # rendered as MSA rows (OTA render_orchard.py)
-STAGES["relay_msasuborch"] = dataclasses.replace(_relay_stage("msasuborch"), dataset_revision="msa_20261003", max_steps=6000)
+STAGES["relay_msasuborch"] = dataclasses.replace(
+    _relay_stage("msasuborch"), dataset_revision="msa_20261003", max_steps=6000
+)
 # msasubeff = msasub + 4,500 Open-SWE-Traces rows chosen for brevity (per task the shortest resolved trajectory, kept if
 # the eval's no-refeed view of it is <= 24k tokens; parallel calls included): same count as msasubswe, shorter
 # trajectories (MSA evals die at the 65k context, the trained models explore 100-200 commands before overflowing)
-STAGES["relay_msasubeff"] = dataclasses.replace(_relay_stage("msasubeff"), dataset_revision="msa_20261003", max_steps=6000)
+STAGES["relay_msasubeff"] = dataclasses.replace(
+    _relay_stage("msasubeff"), dataset_revision="msa_20261003", max_steps=6000
+)
 # msasubnr = msasub's rows re-rendered to the no-refeed eval's context (OTA nr_window.py, windows of 8 trained turns:
 # reasoning removed from every earlier assistant turn, <|start_think|> / <|end_think|> always trained): tests whether
 # the train / eval context mismatch causes the unclosed-think format errors
@@ -1007,23 +1077,67 @@ STAGES["relay_msasubnr"] = dataclasses.replace(_relay_stage("msasubnr"), dataset
 # student 09-21, Qwen3.8 teacher) + Orchard MiniMax-M2.5 + SI2CA SWE rows (the two SWE sources that lifted 09-21 in the
 # screens); msafinnr = the same rows re-rendered to the no-refeed eval's context (nr_window.py)
 # msaswe = msafin without any relay row (Orchard MiniMax + SI2CA only): what CalibForge + TMax relay add
-# msafinmask = msafin with no loss on relay turns whose command > 2,000 chars (cmd_mask.py); msafinnv = msafin + the 4,500
+# msafinmask = msafin with no loss on relay turns whose command > 2,000 chars (cmd_mask.py); msafinnv = msafin + the
+# 4,500
 # Open-SWE-Traces rows; msafinnotmax = msafin without the TMax relay rows (CalibForge relay + Orchard + SI2CA)
-for _arm in ("msafin", "msafinnr", "msafinnr2", "msaswe", "msafinmask", "msafinnv", "msafinnotmax", "msafinorch2", "msafineff", "msafinhint", "msafinhint2", "msafinqwen", "msafinhintf", "msafinhint3", "msafinearly", "msafinearlyh", "msafinsd", "msafinsd2", "msafinearly2", "msafins1", "msafing1", "msafing1s1", "msafing2", "msafing2s1", "msafing3", "msafing3s1", "msafing2nr", "msafing2nrcf", "msafing2nrcfs1"):
-    # msafinhint: CalibForge relay regenerated with a teacher-only context-economy hint replaces the old CalibForge rows; msafinhint2: msafin + those rows
+for _arm in (
+    "msafin",
+    "msafinnr",
+    "msafinnr2",
+    "msaswe",
+    "msafinmask",
+    "msafinnv",
+    "msafinnotmax",
+    "msafinorch2",
+    "msafineff",
+    "msafinhint",
+    "msafinhint2",
+    "msafinqwen",
+    "msafinhintf",
+    "msafinhint3",
+    "msafinearly",
+    "msafinearlyh",
+    "msafinsd",
+    "msafinsd2",
+    "msafinearly2",
+    "msafins1",
+    "msafing1",
+    "msafing1s1",
+    "msafing2",
+    "msafing2s1",
+    "msafing3",
+    "msafing3s1",
+    "msafing2nr",
+    "msafing2nrcf",
+    "msafing2nrcfs1",
+):
+    # msafinhint: CalibForge relay regenerated with a teacher-only context-economy hint replaces the old CalibForge rows;
+    # msafinhint2: msafin + those rows
     # msafinqwen: Qwen-alone CalibForge passes ending on a submit (control arm rows) replace the CalibForge relay rows
     # msafinhintf: hint CalibForge rows on every task (+ tmaxsub + SWE); msafinhint3: hint CalibForge + hint TMax + SWE;
-    # msafinearly / msafinearlyh: early-takeover (16k) hint relay on CalibForge + TMax (+ SWE; h = plus the 32k hint rows);
-    # msafinsd / msafinsd2: msafin + msafin's own shortest passing submit-ending MSA runs (self-distillation; 2 = replaces relay)
+    # msafinearly / msafinearlyh: early-takeover (16k) hint relay on CalibForge + TMax (+ SWE; h = plus the 32k hint
+    # rows);
+    # msafinsd / msafinsd2: msafin + msafin's own shortest passing submit-ending MSA runs (self-distillation; 2 =
+    # replaces relay)
     # msafinearly2: early-takeover (16k) hint relay on both CalibForge and TMax + SWE
     # msafins1: msafin's exact rows with SNOWBALL_SEED=1 (training-noise replicate)
-    # msafing1 / msafing2: guided-relay CalibForge rows (router --assist; v1 hand-off 50k, v2 40k + time) replace the CalibForge relay rows; *s1 = SNOWBALL_SEED=1
+    # msafing1 / msafing2: guided-relay CalibForge rows (router --assist; v1 hand-off 50k, v2 40k + time) replace the
+    # CalibForge relay rows; *s1 = SNOWBALL_SEED=1
     # msafing3: guided v2 relay on both CalibForge and TMax (+ SWE); *s1 = SNOWBALL_SEED=1
     # msafing2nr: msafing2 with its relay rows (guided CalibForge + TMax) in the no-refeed window rendering after the
     # nr_window fix (no trained <|end_think|> after a cut); SWE rows as in msafing2
-    # msafing2nrcf: only the guided CalibForge relay rows in the fixed no-refeed rendering; TMax relay + SWE as in msafing2; *s1 = SNOWBALL_SEED=1
-    # msafineff: msafin with fewer tokens per solve (rows with any observation > 4k tokens dropped; Orchard shorter of 2 samples)
+    # msafing2nrcf: only the guided CalibForge relay rows in the fixed no-refeed rendering; TMax relay + SWE as in
+    # msafing2; *s1 = SNOWBALL_SEED=1
+    # msafineff: msafin with fewer tokens per solve (rows with any observation > 4k tokens dropped; Orchard shorter of 2
+    # samples)
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="msa_20261003", max_steps=12000)
+# Matched CalibForge teacher-only and guided relay SFT from Antidoom RLVR1 step 12.
+# Separate provenance and stage IDs keep the RLVR1 caches apart from the 09-21 arms.
+for _arm in ("rlvr1_vanilla", "rlvr1_relay"):
+    STAGES[f"relay_{_arm}"] = dataclasses.replace(
+        _relay_stage(_arm), dataset_revision="rlvr1_calibforge_matched_20261012", max_steps=12000
+    )
+
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
