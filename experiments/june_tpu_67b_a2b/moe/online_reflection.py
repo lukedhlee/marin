@@ -121,8 +121,15 @@ def run(request: dict, response_path: str) -> None:
         if Path(request["model_before"]).resolve() != Path(base).resolve():
             raise ValueError("first rollout model must equal pinned base")
         sidecar = read_init_base_sidecar(backend["native_init"])
-        if sidecar is None or sidecar["config"]["qk_mult"] != base_config["qk_mult"]:
-            raise ValueError("native initialization lacks matching base provenance")
+        if sidecar is None or sidecar["config"] != base_config:
+            raise ValueError("native initialization lacks matching base configuration")
+        if Path(sidecar["hf_base"]).resolve() != Path(base).resolve():
+            raise ValueError("native initialization names a different HF base")
+        for filename, field in (("config.json", "config_sha256"), ("tokenizer.json", "tokenizer_sha256")):
+            if hashlib.sha256((Path(base) / filename).read_bytes()).hexdigest() != sidecar[field]:
+                raise ValueError(f"native initialization {filename} provenance mismatch")
+        if not sidecar["pending_qb_betas_from_router_bias"]:
+            raise ValueError("native initialization did not preserve the base router biases")
 
     apply_gpu_runtime_defaults()
     DistributedConfig().initialize()
