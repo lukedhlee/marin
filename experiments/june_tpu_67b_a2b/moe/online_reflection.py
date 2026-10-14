@@ -49,6 +49,7 @@ def run(request: dict, response_path: str) -> None:
     import optax
     from haliax.partitioning import set_mesh
     from jax.experimental import multihost_utils
+    from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
     from jax.sharding import NamedSharding
     from jax.sharding import PartitionSpec as P
     from levanter.checkpoint import load_checkpoint, save_checkpoint
@@ -217,8 +218,12 @@ def run(request: dict, response_path: str) -> None:
         jax.block_until_ready(state)
         if int(state.step) != iteration:
             raise ValueError("expected exactly one optimizer step")
-        # Synchronous save: metadata only appears after all tensors are written.
-        save_checkpoint(state, iteration, str(native), is_temporary=False)
+        # Synchronous save: metadata only appears after all tensors are written. The default commit barrier (300 s)
+        # fails when ranks finish their shards minutes apart on a congested /scratch (2026-10-13: BarrierTimeoutError
+        # after ~1 h at ~80 MB/s), so the barrier waits up to six hours.
+        manager = GlobalAsyncCheckpointManager(timeout_secs=6 * 3600)
+        save_checkpoint(state, iteration, str(native), manager=manager, is_temporary=False)
+        manager.wait_until_finished()
         del accumulated, params
         export_params = _apply_qb_betas(state.params, state.pending_qb_betas)
         del state
