@@ -1138,6 +1138,12 @@ for _arm in ("rlvr1_vanilla", "rlvr1_relay"):
         _relay_stage(_arm), dataset_revision="rlvr1_calibforge_matched_20261012", max_steps=12000
     )
 
+# Clean matched CalibForge vanilla/relay pair from 09-21, with a shared Kimi supplement.
+for _arm in ("msa0921_cf_vanilla", "msa0921_cf_relay", "msa0921_cfk_vanilla", "msa0921_cfk_relay"):
+    STAGES[f"relay_{_arm}"] = dataclasses.replace(
+        _relay_stage(_arm), dataset_revision="msa0921_clean_cf_kimi_20261014", max_steps=12000
+    )
+
 STAGE_DATA = {k: (v.messages_field, v.component) for k, v in STAGES.items()}
 
 
