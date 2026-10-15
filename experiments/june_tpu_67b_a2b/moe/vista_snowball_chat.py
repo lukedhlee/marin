@@ -966,6 +966,13 @@ for _arm in ("mrel", "mqwen", "mrelk", "mqwenk"):
 # so each turn's reasoning within the 16k think limit is trained (mqwen trained 13 % of Qwen's reasoning); a row whose
 # uncut render exceeds 65,536 tokens keeps its capped mqwen row
 STAGES["relay_mqwenu"] = dataclasses.replace(_relay_stage("mqwenu"), dataset_revision="mu20261015", max_steps=3000)
+# 2026-10-15 (Horizon) uncut reruns of the best Terminus-2 recipes, each paired with its original in one eval window:
+#   mqwenku   mqwenk's rows (matched Qwen-alone + Kimi) with every older teacher turn's reasoning whole
+#   allkimiu  allkimi's rows (H8: filtered arm A + Horizon relay + Kimi) with every older teacher turn's reasoning whole
+# Same sids and order as the original; a row whose uncut render exceeds 65,536 tokens keeps its capped row. Uncut rows
+# train more tokens, so more steps over the same 3 passes.
+STAGES["relay_mqwenku"] = dataclasses.replace(_relay_stage("mqwenku"), dataset_revision="mku20261015", max_steps=4000)
+STAGES["relay_allkimiu"] = dataclasses.replace(_relay_stage("allkimiu"), dataset_revision="aku20261015", max_steps=4000)
 # 2026-10-01 (Horizon) H10 allclean: every clean relay row (H8's 5,916 + the 2,599 the 2-per-task cap left out) + the
 # 4,392 Kimi traces, from 09-21 (~1,500 steps over 3 passes)
 STAGES["relay_allclean"] = dataclasses.replace(_relay_stage("allclean"), dataset_revision="h10_20261001", max_steps=3000)
