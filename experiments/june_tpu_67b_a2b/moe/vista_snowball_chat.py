@@ -962,6 +962,10 @@ for _arm in ("allkimi", "acont"):
 #   mrelk  matched relay rows + Kimi     mqwenk  matched Qwen-alone rows + Kimi
 for _arm in ("mrel", "mqwen", "mrelk", "mqwenk"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="m20261001", max_steps=3000)
+# 2026-10-15 (Horizon) mqwenu: the mqwen rows re-rendered with every older Qwen turn's reasoning whole (render cap off),
+# so each turn's reasoning within the 16k think limit is trained (mqwen trained 13 % of Qwen's reasoning); a row whose
+# uncut render exceeds 65,536 tokens keeps its capped mqwen row
+STAGES["relay_mqwenu"] = dataclasses.replace(_relay_stage("mqwenu"), dataset_revision="mu20261015", max_steps=3000)
 # 2026-10-01 (Horizon) H10 allclean: every clean relay row (H8's 5,916 + the 2,599 the 2-per-task cap left out) + the
 # 4,392 Kimi traces, from 09-21 (~1,500 steps over 3 passes)
 STAGES["relay_allclean"] = dataclasses.replace(_relay_stage("allclean"), dataset_revision="h10_20261001", max_steps=3000)
