@@ -973,6 +973,8 @@ STAGES["relay_mqwenu"] = dataclasses.replace(_relay_stage("mqwenu"), dataset_rev
 # train more tokens, so more steps over the same 3 passes.
 STAGES["relay_mqwenku"] = dataclasses.replace(_relay_stage("mqwenku"), dataset_revision="mku20261015", max_steps=4000)
 STAGES["relay_allkimiu"] = dataclasses.replace(_relay_stage("allkimiu"), dataset_revision="aku20261015", max_steps=4000)
+# mrelku: mrelk's rows (matched relay + Kimi) uncut, the relay counterpart of mqwenku on the same (task, outcome) multiset
+STAGES["relay_mrelku"] = dataclasses.replace(_relay_stage("mrelku"), dataset_revision="mrku20261015", max_steps=4000)
 # 2026-10-01 (Horizon) H10 allclean: every clean relay row (H8's 5,916 + the 2,599 the 2-per-task cap left out) + the
 # 4,392 Kimi traces, from 09-21 (~1,500 steps over 3 passes)
 STAGES["relay_allclean"] = dataclasses.replace(_relay_stage("allclean"), dataset_revision="h10_20261001", max_steps=3000)
