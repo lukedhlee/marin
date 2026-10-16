@@ -32,7 +32,7 @@ from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from transformers import AutoTokenizer
 
 from experiments.june_tpu_67b_a2b.moe.grug_datakit_chat import (

@@ -74,7 +74,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint, temporary_checkpoint_base_path
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.grug_a2b_agentic_sft_eot import (
     GRUG_A2B_AGENTIC_SFT_FORMAT,

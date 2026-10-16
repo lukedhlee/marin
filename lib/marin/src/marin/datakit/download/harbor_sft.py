@@ -30,11 +30,12 @@ from typing import Protocol
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
-from rigging.filesystem import StoragePath, open_url, prefix_join
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoTokenizer
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import load_parquet_batched

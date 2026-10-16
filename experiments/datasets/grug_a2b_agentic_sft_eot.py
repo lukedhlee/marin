@@ -9,7 +9,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.data import dataset_main
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache, tokenize
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.marin_tokenizer import marin_tokenizer
 
