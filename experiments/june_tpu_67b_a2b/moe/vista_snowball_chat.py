@@ -1137,6 +1137,12 @@ for _arm in ("rlvr1_vanilla", "rlvr1_relay"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(
         _relay_stage(_arm), dataset_revision="rlvr1_calibforge_matched_20261012", max_steps=12000
     )
+# 2026-10-18 uncut reruns: the same matched selection re-rendered with every teacher turn's reasoning whole
+# (render_msa --cap 1e9), same no-refeed windows; a row whose uncut render exceeds 65,536 tokens keeps its capped row.
+for _arm in ("rlvr1_vanillau", "rlvr1_relayu"):
+    STAGES[f"relay_{_arm}"] = dataclasses.replace(
+        _relay_stage(_arm), dataset_revision="rlvr1_calibforge_matched_uncut_20261018", max_steps=12000
+    )
 
 # Clean matched CalibForge vanilla/relay pair from 09-21, with a shared Kimi supplement.
 for _arm in ("msa0921_cf_vanilla", "msa0921_cf_relay", "msa0921_cfk_vanilla", "msa0921_cfk_relay"):
