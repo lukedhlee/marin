@@ -978,6 +978,11 @@ STAGES["relay_mrelku"] = dataclasses.replace(_relay_stage("mrelku"), dataset_rev
 # cfvanilla: plain SFT on every clean passing Qwen3.8-alone CalibForge episode (6,283), reasoning whole and trained,
 # no per-task cap, no matching, no Kimi; rows over 65,536 tokens dropped
 STAGES["relay_cfvanilla"] = dataclasses.replace(_relay_stage("cfvanilla"), dataset_revision="cfv20261015", max_steps=4000)
+# 2026-10-20 grid scale-up, CalibForge only (no Kimi), reasoning whole: the scaled campaign's teacher-alone (gsv),
+# original relay (gsr) and teacher-judge K2 (gsj2) rollouts on waves 00-07, matched on one (task, outcome) multiset,
+# at most 2 rows per task (gs*) or 4 (gs*4); rows over 65,536 tokens dropped before matching
+for _arm in ("gsv", "gsr", "gsj2", "gsv4", "gsr4", "gsj24"):
+    STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="gs20261020", max_steps=4000)
 # 2026-10-01 (Horizon) H10 allclean: every clean relay row (H8's 5,916 + the 2,599 the 2-per-task cap left out) + the
 # 4,392 Kimi traces, from 09-21 (~1,500 steps over 3 passes)
 STAGES["relay_allclean"] = dataclasses.replace(_relay_stage("allclean"), dataset_revision="h10_20261001", max_steps=3000)
