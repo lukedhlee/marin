@@ -28,6 +28,13 @@ goes stale on the next commit.
 
 ## Experiments
 
+### snowball-sft-capacity2
+- Path: `experiments/june_tpu_67b_a2b/moe/`
+- Origin: existing June MoE experiment, FP32 SFT branch at `81157cb732`
+- Status: active
+- Purpose: increase expert-parallel dispatch capacity from 1.0 to 2.0 for new SFT runs after observing 11–14% assignment drops; GPU memory, throughput, and remaining overflow require measurement.
+- Diff: `lukedhlee/snowball-capacity2-20261021` versus `81157cb732`.
+
 ### grug-base-template
 - Path: `experiments/grug/base/`
 - Origin: base

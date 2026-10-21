@@ -46,7 +46,7 @@ from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
-_DEFAULT_EP_CAPACITY_FACTOR = 1.0
+_DEFAULT_EP_CAPACITY_FACTOR = 2.0
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 
