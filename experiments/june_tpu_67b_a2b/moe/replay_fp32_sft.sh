@@ -57,7 +57,8 @@ SMOKE_JOB=$(python3 -c 'import json,os; print(json.load(open(os.environ["FP32_RE
 wait_job "$SMOKE_JOB" "$R/logs/smoke.$SMOKE_JOB.log" 'GUARDED_RUN_EXIT rc=0'
 check_dtype "$R/training/smoke-cfvanilla/checkpoints/step-2"
 say "SMOKE_GATE_PASS"
-for arm in cfvanilla allkimi; do
+select_arm() {
+  local arm=$1
   case "$arm" in
     cfvanilla) epoch=221; warmup=33; wall=02:15:00;;
     allkimi) epoch=401; warmup=60; wall=03:30:00;;
@@ -66,11 +67,23 @@ for arm in cfvanilla allkimi; do
   export SNOWBALL_SCHEDULE_STEPS=$SNOWBALL_STEPS SNOWBALL_WARMUP=$warmup
   export SNOWBALL_CACHE=$OLD/experiments/snowball-relay-sft/cache-relay_$arm-v1
   export SNOWBALL_OUTPUT=$R/training/$arm SNOWBALL_RUN_ID=fp32-${arm}-0921-20261020
-  if [ ! -f "$R/$arm.train.ok" ]; then
+}
+# Submit both independent training arms, adopting a recorded job on restart.
+# Each submission still checks all queued/running requested SUs.
+for arm in cfvanilla allkimi; do
+  select_arm "$arm"
+  if [ ! -f "$R/$arm.train.job" ] && [ ! -f "$R/$arm.train.ok" ]; then
     [ ! -e "$SNOWBALL_OUTPUT" ] || { say "Refusing to overwrite $SNOWBALL_OUTPUT"; exit 1; }
     j=$(submit -N 4 -t "$wall" -J "fp32_$arm" -o "$R/logs/$arm.%j.log" --export=ALL "$MOE/horizon_snowball_guarded.sbatch")
     [ -n "$j" ]; echo "$j" > "$R/$arm.train.job"
     say "TRAIN_SUBMITTED $arm job$j steps$SNOWBALL_STEPS"
+  fi
+done
+for arm in cfvanilla allkimi; do
+  select_arm "$arm"
+  if [ ! -f "$R/$arm.train.ok" ]; then
+    j=$(cat "$R/$arm.train.job")
+    say "TRAIN_ADOPTED $arm job$j"
     wait_job "$j" "$R/logs/$arm.$j.log" 'GUARDED_RUN_EXIT rc=0'
     for step in "$epoch" "$((2 * epoch))" "$((3 * epoch))"; do
       check_dtype "$SNOWBALL_OUTPUT/checkpoints/step-$step"
