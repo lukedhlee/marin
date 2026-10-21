@@ -120,8 +120,9 @@ for rep in 1 2 3; do
       pids=()
     fi
   done
+  for pid in "${pids[@]}"; do wait "$pid"; done
+  pids=()
 done
-for pid in "${pids[@]}"; do wait "$pid"; done
 say "EVALUATION_JOBS_DONE; readouts require coverage/error audit before interpreting scores"
 python3 "$REPLAY_OTA/data/r2egym/horizon/sft/eval_readout.py" \
   --tags fp32van bf16van fp32h8 bf16h8 basefp --day "$DAY" \
