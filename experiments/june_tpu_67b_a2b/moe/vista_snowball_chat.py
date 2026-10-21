@@ -983,6 +983,12 @@ STAGES["relay_cfvanilla"] = dataclasses.replace(_relay_stage("cfvanilla"), datas
 # at most 2 rows per task (gs*) or 4 (gs*4); rows over 65,536 tokens dropped before matching
 for _arm in ("gsv", "gsr", "gsj2", "gsv4", "gsr4", "gsj24"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="gs20261020", max_steps=4000)
+# 2026-10-21 fixed design, CalibForge only (no Kimi), reasoning whole: the same waves 00-07 tasks for teacher-alone (fdv),
+# original relay (fdr), judge K2 (fdj2), judge span 1 cooldown 3 (fdk1) and k1c3 + DoneJudge (fddf); per arm and task the
+# first 2 valid attempts in fixed attempt order, no outcome matching, one common task set, rows over 65,536 tokens cut to
+# their first 65,536 tokens (OpenThoughts-Agent work/relay-fixed-design-20261021)
+for _arm in ("fdv", "fdr", "fdj2", "fdk1", "fddf"):
+    STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="fd20261021", max_steps=4000)
 # 2026-10-01 (Horizon) H10 allclean: every clean relay row (H8's 5,916 + the 2,599 the 2-per-task cap left out) + the
 # 4,392 Kimi traces, from 09-21 (~1,500 steps over 3 passes)
 STAGES["relay_allclean"] = dataclasses.replace(_relay_stage("allclean"), dataset_revision="h10_20261001", max_steps=3000)
