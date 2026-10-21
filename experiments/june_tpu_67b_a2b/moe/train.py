@@ -19,9 +19,9 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
-import numpy as np
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -472,6 +472,8 @@ def init_weights_only_from_checkpoint(
     *,
     mesh: Mesh | None,
     load_ema: bool,
+    mp: jmp.Policy,
+    optimizer: optax.GradientTransformation,
     _load_fn: Callable[..., object] = load_checkpoint,
 ) -> GrugTrainState:
     """Load only model weights from an external checkpoint, resetting the optimizer.
@@ -481,7 +483,8 @@ def init_weights_only_from_checkpoint(
     fresh values in ``state`` so training starts a new LR schedule from step 0 instead of
     resuming the base run's optimizer/step.
 
-    ``load_ema`` mirrors the loaded weights into ``ema_params`` when the run tracks an EMA.
+    Loaded weights are cast to the parameter policy before initializing the optimizer.
+    ``load_ema`` mirrors those weights into ``ema_params`` when the run tracks an EMA.
     """
     # Deserialize only the ``params`` subtree and the ``pending_qb_betas`` leaf, keyed by their
     # GrugTrainState field names so they match the on-disk paths. allow_partial lets the base
@@ -489,9 +492,16 @@ def init_weights_only_from_checkpoint(
     # optimizer tree is never touched and stays fresh from ``state``.
     exemplar: dict[str, object] = {"params": state.params, "pending_qb_betas": state.pending_qb_betas}
     loaded = cast("dict[str, object]", _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True))
-    updates: dict[str, object] = {"params": loaded["params"], "pending_qb_betas": loaded["pending_qb_betas"]}
+    # TensorStore restores the stored dtype, not the exemplar's dtype. In particular,
+    # HF imports may store BF16 even when training requests FP32 master weights.
+    params = mp.cast_to_param(loaded["params"])
+    updates: dict[str, object] = {
+        "params": params,
+        "opt_state": optimizer.init(params),
+        "pending_qb_betas": loaded["pending_qb_betas"],
+    }
     if load_ema and state.ema_params is not None:
-        updates["ema_params"] = loaded["params"]
+        updates["ema_params"] = params
     return dataclasses.replace(state, **updates)
 
 
@@ -502,7 +512,7 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
-    tail: "TailSettings | None" = None,
+    tail: TailSettings | None = None,
     freeze_router_bias: bool = False,
 ):
     one = jnp.array(1, dtype=jnp.int32)
@@ -714,7 +724,7 @@ def _make_tail_score_step(mp: jmp.Policy, *, z_loss_weight: float, num_docs: int
 
 def _run_tail_scoring(
     *,
-    state: "GrugTrainState",
+    state: GrugTrainState,
     train_loader,
     mp: jmp.Policy,
     z_loss_weight: float,
@@ -877,7 +887,20 @@ def run_grug_local(config: GrugRunConfig) -> None:
                     trainer.initialize_from,
                     mesh=mesh,
                     load_ema=config.trainer.ema_beta is not None,
+                    mp=trainer.mp,
+                    optimizer=optimizer,
                 )
+            wrong_dtypes = {
+                str(leaf.dtype)
+                for leaf in jax.tree.leaves(state.params)
+                if eqx.is_inexact_array(leaf) and leaf.dtype != trainer.mp.param_dtype
+            }
+            if wrong_dtypes:
+                raise ValueError(
+                    f"SFT parameter dtypes {wrong_dtypes} do not match {trainer.mp.param_dtype}. "
+                    "Start a fresh run; an older BF16 training checkpoint cannot resume as FP32."
+                )
+            logger.info("SFT parameter precision verified: %s", trainer.mp.param_dtype)
         else:
             state = restore_grug_state_from_checkpoint(
                 state,
@@ -952,7 +975,9 @@ def run_grug_local(config: GrugRunConfig) -> None:
             if config.trainer.tail_num_docs is None:
                 raise ValueError("tail_score_out needs tail_num_docs (the cache's document count).")
             if int(state.step) != 0:
-                raise ValueError(f"tail scoring must start from step 0, found a resumed state at step {int(state.step)}.")
+                raise ValueError(
+                    f"tail scoring must start from step 0, found a resumed state at step {int(state.step)}."
+                )
             _run_tail_scoring(
                 state=state,
                 train_loader=train_loader,
@@ -998,7 +1023,11 @@ def run_grug_local(config: GrugRunConfig) -> None:
                     router_metrics = {
                         key: value
                         for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe_bias/") or key.startswith("train/tail/"))
+                        if (
+                            key.startswith("train/router/")
+                            or key.startswith("moe_bias/")
+                            or key.startswith("train/tail/")
+                        )
                         and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
                     }
                     if router_metrics:

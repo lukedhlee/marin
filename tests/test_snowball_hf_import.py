@@ -3,6 +3,7 @@
 
 import subprocess
 import sys
+from pathlib import Path
 
 import draccus
 import equinox as eqx
@@ -12,6 +13,8 @@ import jmp
 import optax
 import pytest
 from haliax.partitioning import set_mesh
+from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
+from levanter.checkpoint import save_checkpoint
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.sharding import compact_grug_mesh
 
@@ -21,7 +24,13 @@ from experiments.june_tpu_67b_a2b.moe.import_snowball_hf import (
     snowball_hf_state_dict,
 )
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, Transformer
-from experiments.june_tpu_67b_a2b.moe.train import GrugTrainState, _apply_qb_betas, _make_train_step
+from experiments.june_tpu_67b_a2b.moe.train import (
+    GrugTrainState,
+    _apply_qb_betas,
+    _make_train_step,
+    init_weights_only_from_checkpoint,
+    initial_state,
+)
 
 
 def test_importer_cli_loads() -> None:
@@ -143,8 +152,16 @@ def test_hf_import_pending_from_router_bias_reproduces_the_base_bias() -> None:
 def test_importer_cli_parses_base_flags() -> None:
     config = draccus.parse(
         ImportSnowballHfConfig,
-        args=["--hf_checkpoint", "/in", "--output_path", "/out", "--base_config_from_hf", "true",
-              "--pending_from_router_bias", "true"],
+        args=[
+            "--hf_checkpoint",
+            "/in",
+            "--output_path",
+            "/out",
+            "--base_config_from_hf",
+            "true",
+            "--pending_from_router_bias",
+            "true",
+        ],
     )
     assert config.base_config_from_hf and config.pending_from_router_bias
     default = draccus.parse(ImportSnowballHfConfig, args=["--hf_checkpoint", "/in", "--output_path", "/out"])
@@ -184,3 +201,57 @@ def test_train_step_router_bias_freeze(freeze: bool) -> None:
         else:
             assert jnp.array_equal(state.pending_qb_betas, metrics["qb_beta_per_layer"])
             assert not jnp.array_equal(state.pending_qb_betas, pending_in)
+
+
+@pytest.mark.parametrize("stored_dtype", [jnp.bfloat16, jnp.float32])
+@pytest.mark.parametrize("load_ema", [False, True])
+def test_weights_only_import_preserves_small_updates_in_fp32(tmp_path: Path, stored_dtype, load_ema: bool) -> None:
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1, model_axis_size=1)
+    policy = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+    optimizer = optax.adam(1e-4)
+    with set_mesh(mesh):
+        source = jax.tree.map(lambda x: x.astype(stored_dtype) if eqx.is_inexact_array(x) else x, _tiny_model())
+        source = eqx.tree_at(lambda m: m.token_embed, source, jnp.ones_like(source.token_embed))
+        pending = jnp.full((2, 2), 0.25, dtype=jnp.float32)
+        manager = GlobalAsyncCheckpointManager()
+        save_checkpoint(
+            {"params": source, "pending_qb_betas": pending},
+            step=0,
+            checkpoint_path=str(tmp_path / "base"),
+            manager=manager,
+        )
+        manager.wait_until_finished()
+        fresh = initial_state(
+            source.config,
+            optimizer=optimizer,
+            mp=policy,
+            key=jax.random.PRNGKey(1),
+            ema_beta=0.9 if load_ema else None,
+        )
+        loaded = init_weights_only_from_checkpoint(
+            fresh,
+            str(tmp_path / "base"),
+            mesh=mesh,
+            load_ema=load_ema,
+            mp=policy,
+            optimizer=optimizer,
+        )
+        assert int(loaded.step) == 0
+        assert jnp.array_equal(loaded.pending_qb_betas, pending)
+        for actual, expected in zip(jax.tree.leaves(loaded.params), jax.tree.leaves(source), strict=True):
+            if eqx.is_inexact_array(actual):
+                assert actual.dtype == jnp.float32
+                assert jnp.array_equal(actual, expected.astype(jnp.float32))
+        if load_ema:
+            assert eqx.tree_equal(loaded.ema_params, loaded.params)
+        else:
+            assert loaded.ema_params is None
+        assert eqx.tree_equal(loaded.opt_state, optimizer.init(loaded.params))
+        params, opt_state = loaded.params, loaded.opt_state
+        for _ in range(8):
+            grads = jax.tree.map(jnp.ones_like, params)
+            updates, opt_state = optimizer.update(grads, opt_state, params)
+            params = optax.apply_updates(params, updates)
+        # Every 1e-4 update rounds away at a BF16 weight of 1. FP32 must retain
+        # their accumulated effect, including when the source checkpoint was BF16.
+        assert jnp.allclose(params.token_embed, 1.0 - 8e-4, atol=1e-6, rtol=0)
