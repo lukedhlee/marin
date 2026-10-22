@@ -123,10 +123,11 @@ export MODELS="${TAG[fdv]}=${EXP[fdv]} ${TAG[fdr]}=${EXP[fdr]}" REPS="1 2" GROUP
 export HARBOR_SRC=$HOME/snowball/harbor-p0924/src HARBOR_SHA=761fb516 POLICY_FILE=tb2_marin_policy_0924_65k16k.yaml
 export DAY=cf2_20261022 SETS="tb21 swe_s0 swe_s1 tblite_s0 tblite_s1"
 if [ ! -f "$R/eval.ok" ]; then
-  # 2 models x 2 reps x 5 sets x 16 concurrent trials = 320 sandboxes; the shared admission threshold is 850.
+  # 2 models x 2 reps x 5 sets x 16 concurrent trials = 320 sandboxes. Admission threshold DAYTONA_CAP (default 850;
+  # Luke 2026-10-22: the org can take 1,000 more, so this run uses 1,850).
   while :; do
     ds=$(python3 "$REPLAY_OTA/data/r2egym/horizon/sft/daytona_started.py" 2>/dev/null || true)
-    [[ "$ds" =~ ^[0-9]+$ ]] && [ $((ds + 320)) -le 850 ] && break
+    [[ "$ds" =~ ^[0-9]+$ ]] && [ $((ds + 320)) -le "${DAYTONA_CAP:-850}" ] && break
     say "Waiting for Daytona room before eval (started=$ds)"; sleep 60
   done
   say "EVAL_START"
