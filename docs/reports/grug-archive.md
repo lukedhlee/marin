@@ -28,6 +28,13 @@ goes stale on the next commit.
 
 ## Experiments
 
+### snowball-original-relay-kimi-capacity2
+- Path: `experiments/june_tpu_67b_a2b/moe/`
+- Origin: capacity2 vanilla+Kimi experiment at `96f54493fc`
+- Status: active
+- Purpose: original Relay on the same 1,487 CalibForge tasks and exact 4,392 Kimi rows as vanilla, with FP32 masters and expert capacity2; three passes, final-checkpoint evaluation.
+- Diff: `lukedhlee/relay-kimi-capacity2-20261021` versus `96f54493fc`.
+
 ### snowball-sft-capacity2
 - Path: `experiments/june_tpu_67b_a2b/moe/`
 - Origin: existing June MoE experiment, FP32 SFT branch at `81157cb732`
