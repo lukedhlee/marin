@@ -5,7 +5,7 @@
 # Reuses the fixed-design arms' exact packed rows and validated token caches (relay-fixed-design-20261021), so the only
 # change from the capacity-1.0 fdv/fdr pair is this checkout's capacity. Recipe as train_fd_arms.sh: init 09-21, LR 3e-4,
 # 3 passes, warmup round(5 %), batch 16 x 65,536 on 4 nodes, seed 0, one kept checkpoint per pass, FP32 check of each.
-# Then the final-pass exports, and both models x 2 reps of TB2.1 / SWE100 / TB-lite (one 5-node group each).
+# Then the final-pass exports, and both models x 3 reps of TB2.1 / SWE100 / TB-lite (one 5-node group each).
 # Tags cfv2 / cfr2 (no leading "r": eval_readout.py takes the rep from the last "_r" in a run name).
 set -euo pipefail
 unset LD_PRELOAD
@@ -119,15 +119,15 @@ for arm in fdv fdr; do
     touch "$R/$arm.export.ok"; say "export $arm OK"
   fi
 done
-export MODELS="${TAG[fdv]}=${EXP[fdv]} ${TAG[fdr]}=${EXP[fdr]}" REPS="1 2" GROUPED=1 MAXJOBS=20 SERVE_TIME=03:00:00
+export MODELS="${TAG[fdv]}=${EXP[fdv]} ${TAG[fdr]}=${EXP[fdr]}" REPS="1 2 3" GROUPED=1 MAXJOBS=20 SERVE_TIME=03:00:00
 export HARBOR_SRC=$HOME/snowball/harbor-p0924/src HARBOR_SHA=761fb516 POLICY_FILE=tb2_marin_policy_0924_65k16k.yaml
 export DAY=cf2_20261022 SETS="tb21 swe_s0 swe_s1 tblite_s0 tblite_s1"
 if [ ! -f "$R/eval.ok" ]; then
-  # 2 models x 2 reps x 5 sets x 16 concurrent trials = 320 sandboxes. Admission threshold DAYTONA_CAP (default 850;
+  # 2 models x 3 reps x 5 sets x 16 concurrent trials = 480 sandboxes (Luke 2026-10-22: third rep). Admission threshold DAYTONA_CAP (default 850;
   # Luke 2026-10-22: the org can take 1,000 more, so this run uses 1,850).
   while :; do
     ds=$(python3 "$REPLAY_OTA/data/r2egym/horizon/sft/daytona_started.py" 2>/dev/null || true)
-    [[ "$ds" =~ ^[0-9]+$ ]] && [ $((ds + 320)) -le "${DAYTONA_CAP:-850}" ] && break
+    [[ "$ds" =~ ^[0-9]+$ ]] && [ $((ds + 480)) -le "${DAYTONA_CAP:-850}" ] && break
     say "Waiting for Daytona room before eval (started=$ds)"; sleep 60
   done
   say "EVAL_START"
