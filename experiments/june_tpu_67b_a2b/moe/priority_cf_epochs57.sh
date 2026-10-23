@@ -101,7 +101,15 @@ manifest = dict(created_utc=datetime.now(timezone.utc).isoformat(), arms=arms,
 p = r / 'manifest.json'
 if p.exists():
     old = json.loads(p.read_text())
-    assert old['arms'] == arms and old['code_commit'] == manifest['code_commit']
+    assert old['arms'] == arms
+    changes = subprocess.check_output(['git', '-C', str(code), 'diff', '--name-only',
+                                      old['code_commit'], manifest['code_commit']], text=True).splitlines()
+    assert all(name == 'experiments/june_tpu_67b_a2b/moe/priority_cf_epochs57.sh' for name in changes), changes
+    if manifest['code_commit'] != old['code_commit']:
+        revisions = old.setdefault('controller_revisions', [])
+        if not revisions or revisions[-1]['code_commit'] != manifest['code_commit']:
+            revisions.append(dict(code_commit=manifest['code_commit'], utc=manifest['created_utc']))
+            p.write_text(json.dumps(old, indent=2) + '\n')
 else:
     p.write_text(json.dumps(manifest, indent=2) + '\n')
 print(json.dumps(manifest, indent=2))
@@ -118,51 +126,63 @@ for arm in fdv fdr; do
     say "train $arm job$j steps=$steps epoch=$epoch warmup=$warmup wall=${WALL[$arm]}"
   fi
 done
-for arm in fdv fdr; do
-  select_arm "$arm"
-  if [ ! -f "$R/$arm.train.ok" ]; then
-    j=$(cat "$R/$arm.train.job")
-    wait_ok "$j" "$R/logs/train-$arm.$j.log" 'GUARDED_RUN_EXIT rc=0'
-    for e in 5 7; do check_dtype "$SNOWBALL_OUTPUT/checkpoints/step-$((e * epoch))"; done
-    touch "$R/$arm.train.ok"; say "train $arm OK, FP32 checkpoints epochs 5/7"
-  fi
-done
-MODELS=
-for arm in fdv fdr; do
-  select_arm "$arm"
-  for e in 5 7; do
-    s=$((e * epoch)); cell=$arm$e
+score_checkpoint() {
+    local arm=$1 e=$2 s cell j train_job ds
+    select_arm "$arm"
+    s=$((e * epoch)); cell=$arm$e; train_job=$(cat "$R/$arm.train.job")
+    # Levanter writes metadata.json from the asynchronous commit callback, after payloads commit.
+    while [ ! -f "$SNOWBALL_OUTPUT/checkpoints/step-$s/metadata.json" ]; do
+      if ! squeue -h -j "$train_job" -t PD,R,CF,S,RQ,RS | grep -q . && [ ! -f "$SNOWBALL_OUTPUT/checkpoints/step-$s/metadata.json" ]; then
+        echo "FAILED: $cell checkpoint missing after training ended" > "$R/$cell.STATUS"
+        return 1
+      fi
+      sleep 30
+    done
+    check_dtype "$SNOWBALL_OUTPUT/checkpoints/step-$s"
     export SNOWBALL_EXPORT_CHECKPOINT=$SNOWBALL_OUTPUT/checkpoints/step-$s
     export SNOWBALL_EXPORT_OUTPUT=$SNOWBALL_OUTPUT/export-step$s-hf-bf16
     export SNOWBALL_EXPORT_TOKENIZER=$BASE SNOWBALL_EXPORT_BASE=$BASE
-    MODELS+="${TAG[$cell]}=$SNOWBALL_EXPORT_OUTPUT "
     if [ ! -f "$R/$cell.export.ok" ] && [ ! -f "$R/$cell.export.job" ]; then
       j=$(submit -A CCR24067 -p debug -N 4 -t 00:25:00 -J "cf2e57_export_$cell" -o "$R/logs/export-$cell.%j.log" --export=ALL \
           "$MOE/horizon_snowball_export.sbatch")
       [ -n "$j" ]; echo "$j" > "$R/$cell.export.job"; say "export $cell job$j"
     fi
+    if [ ! -f "$R/$cell.export.ok" ]; then
+      j=$(cat "$R/$cell.export.job")
+      wait_ok "$j" "$R/logs/export-$cell.$j.log" EXPORT_CHECK_OK
+      touch "$R/$cell.export.ok"; say "export $cell OK"
+    fi
+    export MODELS="${TAG[$cell]}=$SNOWBALL_EXPORT_OUTPUT" REPS="1 2 3" GROUPED=1 MAXJOBS=18 SERVE_TIME=03:00:00
+    export HARBOR_SRC=$HOME/snowball/harbor-p0924/src HARBOR_SHA=761fb516 POLICY_FILE=tb2_marin_policy_0924_65k16k.yaml
+    export DAY=cf2e57_20261022 SETS="tb21 swe_s0 swe_s1 tblite_s0 tblite_s1"
+    if [ ! -f "$R/$cell.eval.ok" ]; then
+      while :; do
+        ds=$(python3 "$REPLAY_OTA/data/r2egym/horizon/sft/daytona_started.py" 2>/dev/null || true)
+        [[ "$ds" =~ ^[0-9]+$ ]] && [ $((ds + 240)) -le 2000 ] && break
+        say "Waiting for sandbox admission for $cell (started=$ds; need 240; limit 2000)"; sleep 60
+      done
+      say "EVAL_START $cell: 3 groups, 240 concurrent trials"
+      bash "$REPLAY_OTA/data/r2egym/horizon/sft/eval_sft.sh" > "$R/logs/eval-$cell.log" 2>&1
+      touch "$R/$cell.eval.ok"
+    fi
+}
+pids=()
+for arm in fdv fdr; do
+  (
+    j=$(cat "$R/$arm.train.job")
+    wait_ok "$j" "$R/logs/train-$arm.$j.log" 'GUARDED_RUN_EXIT rc=0'
+    touch "$R/$arm.train.ok"; say "train $arm OK"
+  ) &
+  pids+=("$!")
+  for e in 5 7; do
+    ( score_checkpoint "$arm" "$e" ) > "$R/logs/pipeline-$arm$e.log" 2>&1 &
+    pids+=("$!")
   done
 done
-for cell in fdv5 fdv7 fdr5 fdr7; do
-  if [ ! -f "$R/$cell.export.ok" ]; then
-    j=$(cat "$R/$cell.export.job")
-    wait_ok "$j" "$R/logs/export-$cell.$j.log" EXPORT_CHECK_OK
-    touch "$R/$cell.export.ok"; say "export $cell OK"
-  fi
-done
-export MODELS REPS="1 2 3" GROUPED=1 MAXJOBS=18 SERVE_TIME=03:00:00
-export HARBOR_SRC=$HOME/snowball/harbor-p0924/src HARBOR_SHA=761fb516 POLICY_FILE=tb2_marin_policy_0924_65k16k.yaml
-export DAY=cf2e57_20261022 SETS="tb21 swe_s0 swe_s1 tblite_s0 tblite_s1"
-if [ ! -f "$R/eval.ok" ]; then
-  while :; do
-    ds=$(python3 "$REPLAY_OTA/data/r2egym/horizon/sft/daytona_started.py" 2>/dev/null || true)
-    [[ "$ds" =~ ^[0-9]+$ ]] && [ $((ds + 960)) -le 2000 ] && break
-    say "Waiting for sandbox admission (started=$ds; need 960; limit 2000)"; sleep 60
-  done
-  say "EVAL_START: 12 groups, 960 concurrent trials, 3456 attempts"
-  bash "$REPLAY_OTA/data/r2egym/horizon/sft/eval_sft.sh" > "$R/logs/eval.log" 2>&1
-  touch "$R/eval.ok"
-fi
+failed=0
+for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
+[ "$failed" = 0 ]
+touch "$R/eval.ok"
 python3 "$REPLAY_OTA/data/r2egym/horizon/sft/eval_readout.py" --tags cv5 cr5 cv7 cr7 \
   --pairs-with cv5 cr5 cv7 cr7 --out "$R/readout.json" > "$R/readout.txt"
 say "READOUT_WRITTEN: audit missing scores before comparison"
