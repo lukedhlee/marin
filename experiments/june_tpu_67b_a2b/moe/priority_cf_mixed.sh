@@ -97,7 +97,7 @@ submit() {
   done
 }
 phase() {
-  local name=$1 marker=$2 nodes=$3 j queue; shift 3
+  local name=$1 marker=$2 nodes=$3 j queue accounting; shift 3
   [ -f "$R/$name.ok" ] && return
   if [ ! -f "$R/$name.job" ]; then
     j=$(submit "$nodes" -A CCR24067 -p debug -N "$nodes" -o "$R/logs/$name.%j.log" "$@")
@@ -108,6 +108,11 @@ phase() {
   while :; do
     queue=$(squeue -u "$USER" -h -o '%i|%T' | awk -F'|' -v job="$j" '$1 == job {print $2}') || return
     [ -n "$queue" ] || break
+    if [ "$queue" = COMPLETING ]; then
+      accounting=$(sacct -j "$j" -n -P --format=JobIDRaw,State,ExitCode | \
+        awk -F'|' -v job="$j" '$1 == job {print $2 "|" $3}') || return
+      [ "$accounting" != 'COMPLETED|0:0' ] || break
+    fi
     sleep 30
   done
   grep -q "$marker" "$R/logs/$name.$j.log"
