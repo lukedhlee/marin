@@ -21,7 +21,8 @@ case "${1:-driver}" in
     : "${SLURM_JOB_ID:?data preparation must run in a compute allocation}"
     export JAX_PLATFORMS=cpu
     export LD_PRELOAD=$(gcc -print-file-name=libstdc++.so.6)
-    exec "$MARIN_PYTHON" "$MOE/prepare_cf_mixed.py" --source-root "$F" --output-root "$R"
+    exec "$MARIN_PYTHON" "$MOE/prepare_cf_mixed.py" --source-root "$F" --output-root "$R" \
+      --source-manifest "$F/../fixed_design_report.json"
     ;;
   verify)
     : "${SLURM_JOB_ID:?cache audit must run in a compute allocation}"

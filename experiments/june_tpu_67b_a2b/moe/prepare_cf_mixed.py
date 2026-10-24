@@ -128,6 +128,7 @@ def main() -> None:
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--expect-rows", type=int, default=2974)
+    parser.add_argument("--source-manifest", type=Path)
     args = parser.parse_args()
     root = args.output_root
     if (root / "prepared.json").exists() or (root / "data").exists():
@@ -137,6 +138,17 @@ def main() -> None:
     source_rows = {}
     for source, path in sources.items():
         source_rows[source], metadata[source] = scan(path, source, args.expect_rows)
+    manifest_sha256 = None
+    if args.source_manifest is not None:
+        manifest_bytes = args.source_manifest.read_bytes()
+        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        historical = json.loads(manifest_bytes)["per_arm"]
+        for source, census in metadata.items():
+            original = historical[source]
+            if census["sha256"] != original["rows_sha256"] or any(
+                census[key] != original[key] for key in ("rows", "tokens", "trained_tokens")
+            ):
+                raise ValueError(f"Source differs from the original fixed-design manifest: {source}")
     target = metadata["fdv"]["trained_tokens"] // 2
     selected = {source: select(rows, target) for source, rows in source_rows.items()}
     arms = {
@@ -182,6 +194,7 @@ def main() -> None:
             raise ValueError(f"Source changed during preparation: {source}")
     prepared = {
         "sources": metadata,
+        "source_manifest_sha256": manifest_sha256,
         "balanced_reference": "Vanilla supervised tokens per corpus pass",
         "balanced_target_per_source": target,
         "selection_seed": 0,
