@@ -110,7 +110,7 @@ phase() {
     [ -n "$queue" ] || break
     if [ "$queue" = COMPLETING ]; then
       accounting=$(sacct -j "$j" -n -P --format=JobIDRaw,State,ExitCode | \
-        awk -F'|' -v job="$j" '$1 == job {print $2 "|" $3}') || return
+        awk -F'|' -v job="$j" 'index($1, ".") == 0 && $1 == job {print $2 "|" $3}') || return
       [ "$accounting" != 'COMPLETED|0:0' ] || break
     fi
     sleep 30
