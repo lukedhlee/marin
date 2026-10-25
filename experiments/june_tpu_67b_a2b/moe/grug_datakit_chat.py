@@ -242,6 +242,8 @@ class PrerenderedRowProcessor(BatchProcessor[dict, dict]):
     Nothing is re-tokenized. Each row is checked instead: equal lengths, loss values 0/1, ids inside the vocabulary,
     BOS first and untrained, at least one trained token, and at most ``max_tokens`` ids (a longer row would be cut by
     the packer's "left" slice without a word, dropping its trained tail).
+    With student_loss_weight enabled, loss values are ownership labels:0masked,1teacher,2student. Only that
+    opt-in path emits float32 masks; existing binary stages retain int32 arrays and their original cache identity.
     """
 
     def __init__(

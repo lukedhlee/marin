@@ -10,8 +10,10 @@ import numpy as np
 import pytest
 from levanter.data.text.datasets import ChatDataset
 from levanter.store.cache import SerialCacheWriter
+from tokenizers import Tokenizer, models, pre_tokenizers
 
 from experiments.june_tpu_67b_a2b.moe.grug_datakit_chat import PrerenderedRowProcessor
+from experiments.june_tpu_67b_a2b.moe.student_target_labels import add_student_targets
 
 
 @pytest.mark.parametrize("weight", [0.0, 0.1])
@@ -56,3 +58,31 @@ def test_weighted_ownership_cache_rejects_invalid_labels_instead_of_rounding(bad
     )
     with pytest.raises(ValueError):
         processor([{"ids": [128000, 10, 11], "loss": [0, bad, 1]}])
+
+
+@pytest.mark.parametrize("length", [9, 13])
+def test_student_owner_labels_exclude_headers_and_preserve_teacher_targets(length):
+    text = "BOS USER question STUDENT wrong bad END TEACHER fixed END ROUTER stop END"
+    vocab = {word: i for i, word in enumerate(dict.fromkeys(text.split()))}
+    tokenizer = Tokenizer(models.WordLevel(vocab=vocab))
+    tokenizer.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+    ids = tokenizer.encode(text).ids
+    mask = [0] * len(ids)
+    mask[8:10] = [1, 1]
+    source = {
+        "sid": "example",
+        "ids": ids,
+        "loss": mask,
+        "turns": [
+            {"owner": "student", "span": [text.index("wrong"), text.index(" TEACHER")]},
+            {"owner": "teacher", "span": [text.index("fixed"), text.index(" ROUTER")]},
+            {"owner": "router", "span": [text.index("stop"), len(text)]},
+        ],
+    }
+    row = {**source, "ids": ids[:length], "loss": mask[:length]}
+    result, stats = add_student_targets(row, source, tokenizer)
+    expected = list(mask)
+    expected[4:7] = [2, 2, 2]
+    assert result["ids"] == row["ids"]
+    assert result["loss"] == expected[:length]
+    assert stats["student_tokens"] == 3
