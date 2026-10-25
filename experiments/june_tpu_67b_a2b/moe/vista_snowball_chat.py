@@ -1057,6 +1057,10 @@ for _arm in ("fdv", "fdr", "fdj2", "fdk1", "fddf"):
     STAGES[f"relay_{_arm}"] = dataclasses.replace(_relay_stage(_arm), dataset_revision="fd20261021", max_steps=4000)
 # Matched vanilla CalibForge rows plus the same 4,392 Kimi rows used by H8.
 STAGES["relay_fdvk"] = dataclasses.replace(_relay_stage("fdvk"), dataset_revision="fdvkcf2_20261021", max_steps=4000)
+# Filtered Kimi-only control for the FP32/capacity-2 comparisons.
+STAGES["relay_kimifp2"] = dataclasses.replace(
+    _relay_stage("kimifp2"), dataset_revision="kimifp2_20261025", max_steps=4000
+)
 # 2026-10-01 (Horizon) H10 allclean: every clean relay row (H8's 5,916 + the 2,599 the 2-per-task cap left out) + the
 # 4,392 Kimi traces, from 09-21 (~1,500 steps over 3 passes)
 STAGES["relay_allclean"] = dataclasses.replace(_relay_stage("allclean"), dataset_revision="h10_20261001", max_steps=3000)

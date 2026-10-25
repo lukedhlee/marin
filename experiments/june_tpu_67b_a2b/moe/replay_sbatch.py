@@ -71,10 +71,17 @@ def main() -> None:
         requested = nodes * wall
         mine = booked.get(os.environ["USER"], 0)
         total = sum(booked.values())
-        if mine + requested > 700 or total + requested > 1000:
+        reserved_nodes = sum(
+            int(line)
+            for line in subprocess.check_output(
+                ["/usr/bin/squeue", "-u", os.environ["USER"], "-h", "-o", "%D"], text=True
+            ).splitlines()
+            if line.strip()
+        )
+        if mine + requested > 700 or total + requested > 1000 or reserved_nodes + nodes > 100:
             print(
                 f"Waiting for SU room: ours={mine:.2f}, project={total:.2f}, request={requested:.2f}; "
-                "300 reserved for colleagues",
+                f"300 reserved for colleagues; reserved_nodes={reserved_nodes}, requested_nodes={nodes}",
                 file=sys.stderr,
             )
             raise SystemExit(75)
