@@ -244,18 +244,33 @@ class PrerenderedRowProcessor(BatchProcessor[dict, dict]):
     the packer's "left" slice without a word, dropping its trained tail).
     """
 
-    def __init__(self, *, ids_field: str, loss_field: str, max_tokens: int, vocab_size: int, bos_id: int):
+    def __init__(
+        self,
+        *,
+        ids_field: str,
+        loss_field: str,
+        max_tokens: int,
+        vocab_size: int,
+        bos_id: int,
+        student_loss_weight: float = 0.0,
+    ):
         self.ids_field = ids_field
         self.loss_field = loss_field
         self.max_tokens = max_tokens
         self.vocab_size = vocab_size
         self.bos_id = bos_id
+        if not 0 <= student_loss_weight <= 1:
+            raise ValueError("student_loss_weight must be in [0, 1]")
+        self.student_loss_weight = student_loss_weight
 
     def __call__(self, batch: Sequence[dict]) -> Sequence[dict]:
         out = []
         for row in batch:
             ids = np.asarray(row[self.ids_field], dtype=np.int64)
-            loss = np.asarray(row[self.loss_field], dtype=np.int64)
+            raw_loss = np.asarray(row[self.loss_field])
+            if self.student_loss_weight > 0 and not np.isin(raw_loss, (0, 1, 2)).all():
+                raise ValueError("Weighted prerendered rows require integer ownership labels 0, 1, 2")
+            loss = np.asarray(raw_loss, dtype=np.int64)
             name = row.get("id")
             if ids.ndim != 1 or ids.shape != loss.shape:
                 raise ValueError(f"row {name!r}: ids {ids.shape} and loss {loss.shape} differ")
@@ -263,18 +278,24 @@ class PrerenderedRowProcessor(BatchProcessor[dict, dict]):
                 raise ValueError(f"row {name!r} has {ids.size} tokens; rows must be 1..{self.max_tokens}")
             if ids.min() < 0 or ids.max() >= self.vocab_size:
                 raise ValueError(f"row {name!r} has ids outside [0, {self.vocab_size})")
-            if not np.isin(loss, (0, 1)).all():
+            allowed = (0, 1, 2) if self.student_loss_weight > 0 else (0, 1)
+            if not np.isin(loss, allowed).all():
                 raise ValueError(f"row {name!r} has loss values other than 0/1")
             if ids[0] != self.bos_id or loss[0] != 0:
                 raise ValueError(f"row {name!r} must start with an untrained BOS ({self.bos_id})")
             if not loss.any():
                 raise ValueError(f"row {name!r} trains no token")
-            out.append({"input_ids": ids.astype(np.int32), "assistant_masks": loss.astype(np.int32)})
+            if self.student_loss_weight > 0:
+                weights = np.where(loss == 2, self.student_loss_weight, loss).astype(np.float32)
+            else:
+                weights = loss.astype(np.int32)
+            out.append({"input_ids": ids.astype(np.int32), "assistant_masks": weights})
         return out
 
     @property
     def output_exemplar(self):
-        return {"input_ids": np.zeros((0,), dtype=np.int32), "assistant_masks": np.zeros((0,), dtype=np.int32)}
+        dtype = np.float32 if self.student_loss_weight > 0 else np.int32
+        return {"input_ids": np.zeros((0,), dtype=np.int32), "assistant_masks": np.zeros((0,), dtype=dtype)}
 
     @property
     def num_cpus(self) -> int:
@@ -282,7 +303,7 @@ class PrerenderedRowProcessor(BatchProcessor[dict, dict]):
 
     @property
     def metadata(self) -> dict[str, Any]:
-        return {
+        metadata = {
             "row_adapter": "prerendered_ids_loss_v1",
             "ids_field": self.ids_field,
             "loss_field": self.loss_field,
@@ -290,6 +311,9 @@ class PrerenderedRowProcessor(BatchProcessor[dict, dict]):
             "vocab_size": self.vocab_size,
             "bos_id": self.bos_id,
         }
+        if self.student_loss_weight > 0:
+            metadata.update(row_adapter="prerendered_ownership_loss_v1", student_loss_weight=self.student_loss_weight)
+        return metadata
 
 
 @LmDatasetFormatBase.register_subclass("snowball_prerendered_chat")
@@ -304,6 +328,8 @@ class SnowballPrerenderedChatFormat(ChatLmDatasetFormat):
     ids_field: str = "ids"
     loss_field: str = "loss"
     max_tokens: int = 65536
+    # Ownership label2 is opt-in; all existing binary-mask stages retain their int32 cache schema.
+    student_loss_weight: float = 0.0
 
     def build_preprocessor(
         self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
@@ -317,6 +343,7 @@ class SnowballPrerenderedChatFormat(ChatLmDatasetFormat):
             max_tokens=self.max_tokens,
             vocab_size=len(tokenizer),
             bos_id=tokenizer.bos_token_id,
+            student_loss_weight=self.student_loss_weight,
         )
 
 

@@ -651,6 +651,7 @@ class StageSpec:
     # Rows arrive rendered and masked (columns ids + loss; grug_datakit_chat.SnowballPrerenderedChatFormat): the cache
     # copies them, nothing is re-tokenized, and chat_template is unused.
     prerendered: bool = False
+    student_loss_weight: float = 0.0
 
 
 # Ben's Stage-3 / agentic optimizer: the Chat AdamH config with both learning rates at 5e-6.
@@ -1058,6 +1059,9 @@ for _arm in ("fdv", "fdr", "fdj2", "fdk1", "fddf"):
 # Matched vanilla CalibForge rows plus the same 4,392 Kimi rows used by H8.
 STAGES["relay_fdvk"] = dataclasses.replace(_relay_stage("fdvk"), dataset_revision="fdvkcf2_20261021", max_steps=4000)
 STAGES["relay_fdrk"] = dataclasses.replace(_relay_stage("fdrk"), dataset_revision="fdrkcf2_20261021", max_steps=4000)
+STAGES["relay_fdrks01"] = dataclasses.replace(
+    _relay_stage("fdrks01"), dataset_revision="student01_20261025", max_steps=4000, student_loss_weight=0.1
+)
 # 2026-10-01 (Horizon) H10 allclean: every clean relay row (H8's 5,916 + the 2,599 the 2-per-task cap left out) + the
 # 4,392 Kimi traces, from 09-21 (~1,500 steps over 3 passes)
 STAGES["relay_allclean"] = dataclasses.replace(_relay_stage("allclean"), dataset_revision="h10_20261001", max_steps=3000)
@@ -1182,6 +1186,7 @@ def format_for_stage(stage: str) -> ChatLmDatasetFormat:
             ids_field="ids",
             loss_field="loss",
             max_tokens=SNOWBALL_CHAT_SEQUENCE_LENGTH,
+            student_loss_weight=spec.student_loss_weight,
         )
     if spec.datakit_format:
         return SnowballDatakitChatFormat(
@@ -1204,6 +1209,8 @@ def _format_identity(fmt: ChatLmDatasetFormat) -> dict:
         ident["ids_field"] = fmt.ids_field
         ident["loss_field"] = fmt.loss_field
         ident["max_tokens"] = fmt.max_tokens
+        if fmt.student_loss_weight > 0:
+            ident.update(row_adapter="prerendered_ownership_loss_v1", student_loss_weight=fmt.student_loss_weight)
     if isinstance(fmt, SnowballDatakitChatFormat):  # only the Datakit stages carry these keys
         ident["row_adapter"] = "datakit_reasoning_enable_thinking_v1"
         ident["reasoning_key"] = fmt.reasoning_key
