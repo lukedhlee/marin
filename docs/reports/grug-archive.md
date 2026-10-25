@@ -28,6 +28,13 @@ goes stale on the next commit.
 
 ## Experiments
 
+### snowball-relay-student-loss-01
+- Path: `experiments/june_tpu_67b_a2b/moe/`
+- Origin: matched original-Relay+Kimi FP32/capacity2 run at `3d89809e55`
+- Status: active
+- Purpose: keep all baseline tokens and teacher targets, add loss weight0.1 to recorded student-response spans, and compare the final723-step model with the completed student-masked control.
+- Diff: `lukedhlee/relay-student01-20261025` versus `3d89809e55`.
+
 ### snowball-original-relay-kimi-capacity2
 - Path: `experiments/june_tpu_67b_a2b/moe/`
 - Origin: capacity2 vanilla+Kimi experiment at `96f54493fc`
