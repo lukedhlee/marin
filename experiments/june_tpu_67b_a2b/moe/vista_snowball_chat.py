@@ -1058,7 +1058,7 @@ for _arm in ("fdv", "fdr", "fdj2", "fdk1", "fddf"):
 # Matched vanilla CalibForge rows plus the same 4,392 Kimi rows used by H8.
 STAGES["relay_fdvk"] = dataclasses.replace(_relay_stage("fdvk"), dataset_revision="fdvkcf2_20261021", max_steps=4000)
 # fresh = new-teacher Terminal-Lego/SWE-rebench rows + decontaminated CalibForge + Kimi SWE-smith, prerendered (2026-11-03).
-STAGES["fresh_tch"] = dataclasses.replace(_relay_stage("fresh"), dataset_revision="fresh_kimiall_20261103", max_steps=4000)
+STAGES["fresh_tch"] = dataclasses.replace(_relay_stage("fresh"), dataset_id="private/fresh-teacher-sft", dataset_revision="fresh_kimiall_20261103", max_steps=4000)
 # 2026-10-01 (Horizon) H10 allclean: every clean relay row (H8's 5,916 + the 2,599 the 2-per-task cap left out) + the
 # 4,392 Kimi traces, from 09-21 (~1,500 steps over 3 passes)
 STAGES["relay_allclean"] = dataclasses.replace(_relay_stage("allclean"), dataset_revision="h10_20261001", max_steps=3000)
