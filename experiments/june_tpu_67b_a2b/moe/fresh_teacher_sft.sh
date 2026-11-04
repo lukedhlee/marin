@@ -65,7 +65,7 @@ export SNOWBALL_NODES=4 SNOWBALL_DEVICES=16 SNOWBALL_LR=3e-4 SNOWBALL_STAGE=fres
 export SNOWBALL_SCHEDULE_STEPS=$steps SNOWBALL_EPOCH_STEPS=$epoch SNOWBALL_WARMUP=$warmup
 export SNOWBALL_CACHE=${FT_CACHE:?} SNOWBALL_PARQUET_LIST=${FT_PARQUET_LIST:?}
 export SNOWBALL_DATASET_ID=private/fresh-teacher-sft SNOWBALL_DATASET_REVISION=fresh_kimiall_20261103
-export SNOWBALL_SAVE_INTERVAL_MIN=100000 SNOWBALL_KEEP_PER_EPOCH=1 SNOWBALL_PROBE_MEMORY=0
+export SNOWBALL_SAVE_INTERVAL_MIN=100000 SNOWBALL_KEEP_PER_EPOCH=0 SNOWBALL_PROBE_MEMORY=0
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async
 unset SNOWBALL_PROBE_STEPS SNOWBALL_KEEP_EVERY SNOWBALL_RESUME_STEP SNOWBALL_TAIL_FRACTION
 unset SNOWBALL_TAIL_REF SNOWBALL_TAIL_RAMP SNOWBALL_TAIL_SCORE_OUT SNOWBALL_XLA_EXTRA
@@ -101,6 +101,8 @@ assert losses and all(math.isfinite(x) for x in losses),losses
 print('CAPACITY2_SMOKE_OK',drops,losses,flush=True)
 PY
 fi
+# A 67B FP32 checkpoint is ~750 GB; scratch filled on 11-04 with smoke + epoch saves. Keep only the final one.
+rm -rf "$R/training/smoke/checkpoints"
 export SNOWBALL_STEPS=$steps SNOWBALL_OUTPUT=$R/training/fresh_teacher SNOWBALL_RUN_ID=fp32-ftsft-0921-20261103
 # Allow startup, three checkpoint saves, and slower capacity2 dispatch. No old run is resumed.
 phase train 'GUARDED_RUN_EXIT rc=0' -N 4 -t 06:30:00 -J fp32_ftsft --export=ALL "$MOE/horizon_snowball_guarded.sbatch"
