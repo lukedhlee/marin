@@ -72,7 +72,7 @@ unset SNOWBALL_TAIL_REF SNOWBALL_TAIL_RAMP SNOWBALL_TAIL_SCORE_OUT SNOWBALL_XLA_
 phase cache PREP_DONE -N 1 -t 01:00:00 -J ftsft_cache \
   --export=ALL,SNOWBALL_ENV="$(dirname "$(dirname "$MARIN_PYTHON")")",PREP_STEPS=cache "$MOE/horizon_r2egym_prep.sbatch"
 # Every cached row must equal its parquet row (ids and loss mask) before any training step.
-phase parity CACHE_PARITY_OK -N 1 -t 00:30:00 -J ftsft_parity \
+phase parity CACHE_PARITY_OK -A CCR24067 -p debug -N 1 -t 00:30:00 -J ftsft_parity \
   --export=ALL,JAX_PLATFORMS=cpu,OMP_NUM_THREADS=8 --wrap="\"$MARIN_PYTHON\" '$MOE/fresh_teacher_cache_parity.py' '$SNOWBALL_CACHE' \"\$(head -1 '$SNOWBALL_PARQUET_LIST')\""
 export SNOWBALL_STEPS=6 SNOWBALL_OUTPUT=$R/training/smoke SNOWBALL_RUN_ID=fp32-ftsft-smoke-20261103
 phase smoke 'GUARDED_RUN_EXIT rc=0' -N 4 -t 00:40:00 -J ftsft_smoke --export=ALL "$MOE/horizon_snowball_guarded.sbatch"
